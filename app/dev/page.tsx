@@ -33,7 +33,7 @@ export default function DevPage() {
   const [drawingSubmitted, setDrawingSubmitted] = useState(false);
   const [drawingCompleted, setDrawingCompleted] = useState(false);
   const [profileSubmitted, setProfileSubmitted] = useState(false);
-  const [drawnImageData, setDrawnImageData] = useState('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZmZmIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzAwMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPk1vY2sgRHJhd2luZzwvdGV4dD48L3N2Zz4=');
+  const [drawnImageUrl, setDrawnImageUrl] = useState('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZmZmIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzAwMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPk1vY2sgRHJhd2luZzwvdGV4dD48L3N2Zz4=');
   const [error, setError] = useState('');
 
   const handleJoin = () => {
@@ -51,9 +51,9 @@ export default function DevPage() {
     setDrawingSubmitted(true);
   };
 
-  const handleDrawingComplete = (imageData: string) => {
+  const handleDrawingComplete = (imageUrl: string) => {
     console.log('Mock drawing complete');
-    setDrawnImageData(imageData);
+    setDrawnImageUrl(imageUrl);
     setDrawingCompleted(true);
   };
 
@@ -159,9 +159,11 @@ export default function DevPage() {
               onDrawingComplete={handleDrawingComplete}
               onSubmitProfile={handleSubmitProfile}
               drawingCompleted={drawingCompleted}
-              drawnImageData={drawnImageData}
+              drawnImageUrl={drawnImageUrl}
               profileSubmitted={profileSubmitted}
               error={error}
+              roomCode={roomCode}
+              playerName={playerName}
             />
           )}
         </div>
