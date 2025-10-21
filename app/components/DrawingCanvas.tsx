@@ -166,13 +166,12 @@ export function DrawingCanvas({
     
     try {
       // Convert canvas to Blob (JPEG with 80% quality for smaller file size)
-      const blob = await new Promise<Blob>((resolve) => {
-        canvas.toBlob(resolve, 'image/jpeg', 0.8)
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) resolve(blob)
+          else reject(new Error("Failed to create blob"))
+        }, 'image/jpeg', 0.8)
       })
-      
-      if (!blob) {
-        throw new Error('Failed to convert canvas to blob')
-      }
       
       // Ensure user is authenticated
       await ensureAuth()
