@@ -1,103 +1,538 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
+import { useState, useEffect, useRef } from 'react';
+import { db, ensureAuth } from '../lib/firebase';
+import { doc, getDoc, updateDoc, arrayUnion, arrayRemove, onSnapshot } from 'firebase/firestore';
+import { JoinPage } from './components/JoinPage';
+import { LobbyPage } from './components/LobbyPage';
+import { PreProfilePage } from './components/PreProfilePage';
+import { ProfilePage } from './components/ProfilePage';
+import { VotingPage } from './components/VotingPage';
+
+interface Player {
+  name: string;
+  score: number;
+}
+
+interface GameData {
+  gameState: string;
+  players: Player[];
+  host: string;
+}
+
+interface GameSession {
+  roomCode: string;
+  playerName: string;
+}
+
+// Helper functions for localStorage
+const getSession = (): GameSession | null => {
+  if (typeof window === 'undefined') return null;
+  const session = localStorage.getItem('gameSession');
+  return session ? JSON.parse(session) : null;
+};
+
+const setSession = (session: GameSession) => {
+  localStorage.setItem('gameSession', JSON.stringify(session));
+};
+
+const clearSession = () => {
+  localStorage.removeItem('gameSession');
+};
+
+const getLastPlayerName = (): string => {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('lastPlayerName') || '';
+};
+
+const setLastPlayerName = (name: string) => {
+  localStorage.setItem('lastPlayerName', name);
+};
+
+export default function HomePage() {
+  // Dev mode check
+  const isDevMode = typeof window !== 'undefined' && window.location.search.includes('dev=true');
+  const devStage = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('stage') : null;
+
+  const [roomCode, setRoomCode] = useState('');
+  const [playerName, setPlayerName] = useState(''); // Will be set after client-side mount
+  const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  
+  const [gameData, setGameData] = useState<GameData | null>(null);
+  const [view, setView] = useState<'join' | 'lobby' | 'drawing' | 'profile' | 'voting'>('join');
+  
+  // State for the drawing (pre-profile) phase
+  const [drawingSubmitted, setDrawingSubmitted] = useState(false);
+  
+  // State for the profile drawing phase
+  const [assignedPersona, setAssignedPersona] = useState('');
+  const [assignedQuirk, setAssignedQuirk] = useState('');
+  const [profileName, setProfileName] = useState('');
+  const [profileBio, setProfileBio] = useState('');
+  const [profileSubmitted, setProfileSubmitted] = useState(false);
+  const [drawingCompleted, setDrawingCompleted] = useState(false);
+  const [drawnImageUrl, setDrawnImageUrl] = useState<string>('');
+  const canvasRef = useRef<any>(null);
+  
+  // State for drawing tools (kept for compatibility, but not used in new DrawingCanvas)
+  const [strokeColor, setStrokeColor] = useState('black');
+  const [strokeWidth, setStrokeWidth] = useState(5);
+
+  // Dev mode logic - override normal flow for UI development
+  if (isDevMode && devStage) {
+    // Mock data for dev mode
+    const mockGameData = {
+      host: 'John',
+      players: [
+        { name: 'John', score: 0 },
+        { name: 'Sarah', score: 0 },
+        { name: 'Mike', score: 0 },
+      ],
+      gameState: devStage === 'lobby' ? 'lobby' : devStage === 'drawing' ? 'pre-profile' : 'profile'
+    };
+
+    const mockAssignedPrompts = {
+      assignedPersona: 'A very confident snail',
+      assignedQuirk: 'running for president'
+    };
+
+    // Override state for dev mode
+    if (devStage === 'join') {
+      return (
+        <JoinPage
+          roomCode={roomCode}
+          setRoomCode={setRoomCode}
+          playerName={playerName}
+          setPlayerName={setPlayerName}
+          onJoin={() => console.log('Dev mode join clicked')}
+          isLoading={false}
+          error={error}
         />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+      );
+    }
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
-  );
+    if (devStage === 'lobby') {
+      return (
+        <LobbyPage
+          roomCode="ABCD"
+          gameData={mockGameData}
+          playerName="John"
+          onStartGame={() => console.log('Dev mode start game clicked')}
+        />
+      );
+    }
+
+    if (devStage === 'preprofile') {
+      return (
+        <PreProfilePage
+          onSubmitIdeas={() => console.log('Dev mode submit ideas clicked')}
+          preProfileSubmitted={false}
+          error=""
+        />
+      );
+    }
+
+    if (devStage === 'profile') {
+      return (
+        <ProfilePage
+          assignedPersona={mockAssignedPrompts.assignedPersona}
+          assignedQuirk={mockAssignedPrompts.assignedQuirk}
+          profileName={profileName}
+          setProfileName={setProfileName}
+          profileBio={profileBio}
+          setProfileBio={setProfileBio}
+          onDrawingComplete={(imageUrl) => console.log('Dev mode drawing complete', imageUrl)}
+          onSubmitProfile={() => console.log('Dev mode submit profile clicked')}
+          drawingCompleted={true}
+          drawnImageUrl="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZmZmIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzAwMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPk1vY2sgRHJhd2luZzwvdGV4dD48L3N2Zz4="
+          profileSubmitted={false}
+          error=""
+          roomCode="ABCD"
+          playerName="John"
+        />
+      );
+    }
+    
+    if (devStage === 'voting') {
+      return (
+        <VotingPage
+          roomCode="ABCD"
+          playerName="John"
+          onVotingComplete={() => console.log('Dev mode voting complete')}
+        />
+      );
+    }
+  }
+
+  // This effect runs ONCE when the app loads to check for a reconnect
+  useEffect(() => {
+    const checkAndRestoreSession = async () => {
+      // Authenticate first
+      try {
+        await ensureAuth();
+        console.log('✅ Authenticated on app load');
+      } catch (error) {
+        console.error('❌ Failed to authenticate:', error);
+        return;
+      }
+
+      // Pre-fill with last used name
+      setPlayerName(getLastPlayerName());
+
+      const session = getSession();
+      if (session?.roomCode && session?.playerName) {
+        // We have a session, let's see if it's still valid
+        const roomRef = doc(db, "rooms", session.roomCode);
+        try {
+          const docSnap = await getDoc(roomRef);
+
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            const isPlayerInRoom = data.players?.some((p: Player) => p.name === session.playerName);
+            
+            if (isPlayerInRoom) {
+              // The room exists and the player is still in it. Let's reconnect!
+              console.log('✅ Restoring session for room:', session.roomCode);
+              setRoomCode(session.roomCode);
+              setPlayerName(session.playerName);
+              
+              // Restore to the correct view based on game state
+              const gameState = data.gameState;
+              if (gameState === 'lobby') {
+                setView('lobby');
+              } else if (gameState === 'pre-profile') {
+                setView('drawing');
+              } else if (gameState === 'profile') {
+                setView('profile');
+              } else if (gameState === 'showcase' || gameState === 'voting' || gameState === 'matchpick' || gameState === 'results') {
+                setView('voting');
+              } else {
+                setView('lobby'); // Default to lobby if unknown state
+              }
+            } else {
+              // Player not in room anymore
+              console.log('🚫 Player not in room, clearing session...');
+              clearSession();
+              setError('You were removed from the room or the game ended.');
+              setView('join');
+              setRoomCode('');
+            }
+          } else {
+            // The room doesn't exist anymore (host disconnected)
+            console.log('🚫 Room no longer exists, clearing session...');
+            clearSession();
+            setError('The room has been closed.');
+            setView('join');
+            setRoomCode('');
+          }
+        } catch (err) {
+          console.error('❌ Failed to restore session:', err);
+          clearSession();
+          setError('Failed to reconnect to the room.');
+          setView('join');
+          setRoomCode('');
+        }
+      }
+    };
+    checkAndRestoreSession();
+  }, []); // The empty array [] means this runs only once on mount
+
+  // This effect listens for real-time game updates once in the lobby, drawing, profile, or voting
+  useEffect(() => {
+    if ((view !== 'lobby' && view !== 'drawing' && view !== 'profile' && view !== 'voting') || !roomCode) return;
+
+    const roomRef = doc(db, "rooms", roomCode);
+    const unsubscribe = onSnapshot(
+      roomRef, 
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data() as GameData;
+          setGameData(data);
+          
+          // Check if game state changed to pre-profile (drawing phase)
+          if (data.gameState === 'pre-profile' && view === 'lobby') {
+            setView('drawing');
+            setDrawingSubmitted(false); // Reset drawing submission state
+          }
+          
+          // Check if game state changed to profile (profile creation phase)
+          if (data.gameState === 'profile' && view === 'drawing') {
+            setView('profile');
+            setProfileSubmitted(false); // Reset profile submission state
+            setDrawingCompleted(false); // Reset drawing completion state
+            setDrawnImageUrl(''); // Reset drawn image URL
+            // Fetch the assigned prompts for this player
+            fetchAssignedPrompts();
+          }
+          
+          // Check if game state changed to showcase/voting/favorite/results phases
+          if ((data.gameState === 'showcase' || data.gameState === 'voting' || data.gameState === 'favorite' || data.gameState === 'results') && view === 'profile') {
+            setView('voting');
+          }
+        } else {
+          // Room was deleted (host disconnected)
+          console.log('🚨 Room deleted - host disconnected');
+          setError("Host disconnected. The room has been closed.");
+          setView('join');
+          setRoomCode('');
+          clearSession();
+        }
+      },
+      (error) => {
+        // Handle errors (permissions, network issues, etc.)
+        console.error('❌ Error listening to room:', error);
+        setError("Lost connection to room. Please rejoin.");
+        setView('join');
+        setRoomCode('');
+        clearSession();
+      }
+    );
+
+    return () => unsubscribe();
+  }, [view, roomCode]);
+
+  const fetchAssignedPrompts = async () => {
+    const roomRef = doc(db, "rooms", roomCode);
+    const assignmentRef = doc(roomRef, "assignments", playerName);
+    
+    try {
+      const assignmentSnap = await getDoc(assignmentRef);
+      if (assignmentSnap.exists()) {
+        const data = assignmentSnap.data();
+        setAssignedPersona(data.assignedPersona || '');
+        setAssignedQuirk(data.assignedQuirk || '');
+        setProfileName(data.assignedPersona || ''); // Pre-fill with assigned persona
+      }
+    } catch (err) {
+      console.error("Failed to fetch assigned prompts:", err);
+    }
+  };
+
+  // Auto-remove player when they close the tab
+  useEffect(() => {
+    if (view !== 'lobby' || !roomCode || !playerName) return;
+
+    const handleBeforeUnload = () => {
+      // This runs when the player closes the tab
+      const roomRef = doc(db, "rooms", roomCode);
+      // We use arrayRemove to pull this player's object out of the list
+      updateDoc(roomRef, {
+        players: arrayRemove({ name: playerName, score: 0 })
+      });
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [view, roomCode, playerName]);
+
+  const handleJoinGame = async () => {
+    const upperRoomCode = roomCode.toUpperCase().trim();
+    if (!upperRoomCode || !playerName) {
+      setError('Please fill out all fields.');
+      return;
+    }
+
+    setIsLoading(true);
+    setError('');
+
+    try {
+      // Ensure user is authenticated before accessing Firestore
+      await ensureAuth();
+      
+      const roomRef = doc(db, "rooms", upperRoomCode);
+      const docSnap = await getDoc(roomRef);
+      if (docSnap.exists()) {
+        const currentPlayers = docSnap.data().players || [];
+        
+        if (currentPlayers.some((p: Player) => p.name === playerName)) {
+          setError("A player with that name is already in the room.");
+          return;
+        }
+
+        await updateDoc(roomRef, { 
+          players: arrayUnion({ name: playerName, score: 0 }) 
+        });
+        
+        if (currentPlayers.length === 0) {
+          await updateDoc(roomRef, { host: playerName });
+        }
+        
+        // Save the successful session
+        setLastPlayerName(playerName);
+        setSession({ roomCode: upperRoomCode, playerName });
+        setView('lobby');
+      } else {
+        setError("That room doesn't exist. Check your code!");
+      }
+    } catch (err) {
+      console.error(err);
+      setError("Could not connect to the game. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleStartGame = async () => {
+    if (gameData?.host !== playerName) return;
+    
+    const roomRef = doc(db, "rooms", roomCode);
+    
+    // Calculate the end time 60 seconds from now
+    const endTime = new Date();
+    endTime.setSeconds(endTime.getSeconds() + 60); // <-- Changed from 30 to 60
+
+    await updateDoc(roomRef, {
+      gameState: 'pre-profile', // <-- Use the new state name
+      roundEndTime: endTime     // <-- Set the master clock
+    });
+  };
+
+  if (view === 'join') {
+    return (
+      <JoinPage
+        roomCode={roomCode}
+        setRoomCode={setRoomCode}
+        playerName={playerName}
+        setPlayerName={setPlayerName}
+        onJoin={handleJoinGame}
+        isLoading={isLoading}
+        error={error}
+      />
+    );
+  }
+
+  if (view === 'lobby') {
+    return (
+      <LobbyPage
+        roomCode={roomCode}
+        gameData={gameData}
+        playerName={playerName}
+        onStartGame={handleStartGame}
+      />
+    );
+  }
+
+  if (view === 'drawing') {
+    const handleSubmitIdeas = async () => {
+      const persona = (document.getElementById('persona') as HTMLInputElement)?.value;
+      const quirk = (document.getElementById('quirk') as HTMLInputElement)?.value;
+      
+      if (!persona || !quirk) {
+        setError('Please fill out both fields.');
+        return;
+      }
+
+      try {
+        await ensureAuth();
+        
+        const roomRef = doc(db, "rooms", roomCode);
+        const submissionRef = doc(roomRef, "submissions", playerName);
+        
+        await updateDoc(submissionRef, {
+          persona,
+          quirk,
+          submittedAt: new Date()
+        }).catch(async (err) => {
+          // If document doesn't exist, create it with setDoc
+          const { setDoc } = await import('firebase/firestore');
+          await setDoc(submissionRef, {
+            persona,
+            quirk,
+            submittedAt: new Date()
+          });
+        });
+        
+        setError(''); // Clear any errors
+        setDrawingSubmitted(true); // Show waiting screen
+      } catch (err) {
+        console.error('Failed to submit:', err);
+        setError('Failed to submit. Please try again.');
+      }
+    };
+
+    return (
+      <PreProfilePage
+        onSubmitIdeas={handleSubmitIdeas}
+        preProfileSubmitted={drawingSubmitted}
+        error={error}
+      />
+    );
+  }
+
+  if (view === 'profile') {
+    const handleDrawingComplete = (imageUrl: string) => {
+      setDrawnImageUrl(imageUrl);
+      setDrawingCompleted(true);
+    };
+
+    const handleSubmitProfile = async () => {
+      if (!profileName || !profileBio) {
+        setError('Please fill out all fields.');
+        return;
+      }
+
+      try {
+        const roomRef = doc(db, "rooms", roomCode);
+        const profileRef = doc(roomRef, "profiles", playerName);
+        
+        const { setDoc } = await import('firebase/firestore');
+        await setDoc(profileRef, {
+          name: profileName,
+          bio: profileBio,
+          imageUrl: drawnImageUrl,
+          persona: assignedPersona,
+          quirk: assignedQuirk,
+          likes: [], // Initialize empty likes array
+          submittedAt: new Date()
+        });
+        
+        console.log(`Profile submitted: ${profileName}, ${profileBio}`);
+        setError(''); // Clear errors
+        setProfileSubmitted(true); // Switch to the "Waiting" screen
+      } catch (err) {
+        console.error('Failed to submit profile:', err);
+        setError('Failed to submit profile. Please try again.');
+      }
+    };
+
+    return (
+      <ProfilePage
+        assignedPersona={assignedPersona}
+        assignedQuirk={assignedQuirk}
+        profileName={profileName}
+        setProfileName={setProfileName}
+        profileBio={profileBio}
+        setProfileBio={setProfileBio}
+        onDrawingComplete={handleDrawingComplete}
+        onSubmitProfile={handleSubmitProfile}
+        drawingCompleted={drawingCompleted}
+        drawnImageUrl={drawnImageUrl}
+        profileSubmitted={profileSubmitted}
+        error={error}
+        roomCode={roomCode}
+        playerName={playerName}
+      />
+    );
+  }
+
+  if (view === 'voting') {
+    const handleVotingComplete = () => {
+      // Voting phase complete, could transition to results or next phase
+      console.log('Voting phase completed');
+    };
+
+    return (
+      <VotingPage
+        roomCode={roomCode}
+        playerName={playerName}
+        onVotingComplete={handleVotingComplete}
+      />
+    );
+  }
+
+  return null;
 }
