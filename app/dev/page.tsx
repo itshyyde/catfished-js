@@ -126,6 +126,7 @@ export default function DevPage() {
               playerName={playerName}
               setPlayerName={setPlayerName}
               onJoin={handleJoin}
+              onCreateGame={() => console.log('Mock create game')}
               isLoading={false}
               error={error}
             />

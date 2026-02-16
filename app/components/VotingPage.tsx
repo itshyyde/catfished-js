@@ -1,14 +1,23 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
-import { Heart, HeartCrack } from 'lucide-react'
+import { Heart, HeartCrack, Trophy, Crown } from 'lucide-react'
 import { db, ensureAuth } from '../../lib/firebase'
-import { doc, collection, onSnapshot, updateDoc, arrayUnion } from 'firebase/firestore'
+import { doc, collection, onSnapshot, updateDoc, arrayUnion, getDoc } from 'firebase/firestore'
+import { CountdownTimer } from './CountdownTimer'
+
+interface Player {
+  name: string
+  score: number
+}
 
 interface VotingPageProps {
   roomCode: string
   playerName: string
+  isHost: boolean
+  players: Player[]
   onVotingComplete: () => void
+  onPlayAgain: () => void
 }
 
 interface Profile {
@@ -19,35 +28,88 @@ interface Profile {
   persona: string
   quirk: string
   likes: string[]
-  matchPick?: string
+  favoritePick?: string
 }
 
-export function VotingPage({ roomCode, playerName, onVotingComplete }: VotingPageProps) {
+interface ScoreEntry {
+  name: string
+  total: number
+  likePoints: number
+  favoritePoints: number
+  mutualMatch: boolean
+  mutualPartner?: string
+}
+
+const SHOWCASE_SECONDS = 15
+
+function calculateScores(profiles: Profile[], players: Player[]): ScoreEntry[] {
+  const scores: Record<string, ScoreEntry> = {}
+
+  players.forEach(p => {
+    scores[p.name] = { name: p.name, total: 0, likePoints: 0, favoritePoints: 0, mutualMatch: false }
+  })
+
+  profiles.forEach(profile => {
+    const name = profile.id
+    if (!scores[name]) return
+
+    // +5 per like received
+    const likePoints = (profile.likes?.length || 0) * 5
+    scores[name].likePoints = likePoints
+    scores[name].total += likePoints
+  })
+
+  // Favorite points
+  profiles.forEach(profile => {
+    if (!profile.favoritePick || !scores[profile.favoritePick]) return
+
+    const pickedProfile = profiles.find(p => p.id === profile.favoritePick)
+    if (pickedProfile?.favoritePick === profile.id) {
+      // Mutual match: +25 + 10 bonus for the picked player
+      if (!scores[profile.id].mutualMatch) {
+        scores[profile.id].mutualMatch = true
+        scores[profile.id].mutualPartner = profile.favoritePick
+        scores[profile.id].favoritePoints += 35
+        scores[profile.id].total += 35
+      }
+    } else {
+      // One-sided: picked player gets +10
+      scores[profile.favoritePick].favoritePoints += 10
+      scores[profile.favoritePick].total += 10
+    }
+  })
+
+  return Object.values(scores).sort((a, b) => b.total - a.total)
+}
+
+export function VotingPage({ roomCode, playerName, isHost, players, onVotingComplete, onPlayAgain }: VotingPageProps) {
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null)
   const [gameState, setGameState] = useState<string>('showcase')
   const [showcaseIndex, setShowcaseIndex] = useState<number>(0)
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [hasVoted, setHasVoted] = useState<boolean>(false)
   const [hasPickedMatch, setHasPickedMatch] = useState<boolean>(false)
+  const [timerEndTime, setTimerEndTime] = useState<Date | null>(null)
 
   // Listen to room state changes
   useEffect(() => {
     const roomRef = doc(db, 'rooms', roomCode)
-    const unsubscribe = onSnapshot(roomRef, (doc) => {
-      if (doc.exists()) {
-        const data = doc.data()
+    const unsubscribe = onSnapshot(roomRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data()
         const newGameState = data.gameState || 'showcase'
         const newShowcaseIndex = data.showcaseIndex ?? 0
-        
-        // Reset favorite pick flag when entering favorite phase
+
         if (newGameState === 'favorite' && gameState !== 'favorite') {
           setHasPickedMatch(false)
         }
-        
+
         setGameState(newGameState)
         setShowcaseIndex(newShowcaseIndex)
-        
-        console.log(`🎮 State: ${newGameState}, Index: ${newShowcaseIndex}`)
+
+        if (data.timerEndTime) {
+          setTimerEndTime(data.timerEndTime.toDate ? data.timerEndTime.toDate() : new Date(data.timerEndTime))
+        }
       }
     })
 
@@ -58,17 +120,17 @@ export function VotingPage({ roomCode, playerName, onVotingComplete }: VotingPag
   useEffect(() => {
     const profilesCollectionRef = collection(db, 'rooms', roomCode, 'profiles')
     const unsubscribe = onSnapshot(profilesCollectionRef, (snapshot) => {
-      const profilesList: Profile[] = snapshot.docs.map((doc) => {
-        const data = doc.data()
+      const profilesList: Profile[] = snapshot.docs.map((docSnap) => {
+        const data = docSnap.data()
         return {
-          id: doc.id,
+          id: docSnap.id,
           name: data.name || '',
           bio: data.bio || '',
           imageUrl: data.imageUrl || '',
           persona: data.persona || '',
           quirk: data.quirk || '',
           likes: data.likes || [],
-          matchPick: data.matchPick
+          favoritePick: data.favoritePick
         }
       })
       setProfiles(profilesList)
@@ -81,26 +143,74 @@ export function VotingPage({ roomCode, playerName, onVotingComplete }: VotingPag
   useEffect(() => {
     if (showcaseIndex >= 0 && showcaseIndex < profiles.length) {
       setCurrentProfile(profiles[showcaseIndex])
-      setHasVoted(false) // Reset vote for new profile
-      console.log(`📍 Switched to profile ${showcaseIndex + 1}/${profiles.length}`)
+      setHasVoted(false)
     }
   }, [showcaseIndex, profiles.length])
+
+  // Host: auto-advance showcase with timer
+  useEffect(() => {
+    if (!isHost || gameState !== 'showcase' || profiles.length === 0) return
+
+    const advanceShowcase = async () => {
+      const roomRef = doc(db, 'rooms', roomCode)
+      const nextIndex = showcaseIndex + 1
+
+      if (nextIndex < profiles.length) {
+        const nextEndTime = new Date()
+        nextEndTime.setSeconds(nextEndTime.getSeconds() + SHOWCASE_SECONDS)
+        await updateDoc(roomRef, {
+          showcaseIndex: nextIndex,
+          timerEndTime: nextEndTime,
+        })
+      } else {
+        // All profiles shown, move to favorite pick
+        await updateDoc(roomRef, { gameState: 'favorite' })
+      }
+    }
+
+    // Set initial timer for first profile
+    if (showcaseIndex === 0 && !timerEndTime) {
+      const endTime = new Date()
+      endTime.setSeconds(endTime.getSeconds() + SHOWCASE_SECONDS)
+      const roomRef = doc(db, 'rooms', roomCode)
+      updateDoc(roomRef, { timerEndTime: endTime })
+    }
+
+    const timer = setTimeout(advanceShowcase, SHOWCASE_SECONDS * 1000)
+    return () => clearTimeout(timer)
+  }, [isHost, gameState, showcaseIndex, profiles.length, roomCode])
+
+  // Host: detect all favorite picks → advance to results
+  useEffect(() => {
+    if (!isHost || gameState !== 'favorite') return
+
+    const allPicked = profiles.length >= players.length &&
+      profiles.every(p => p.favoritePick !== undefined)
+
+    if (allPicked && profiles.length > 0) {
+      const roomRef = doc(db, 'rooms', roomCode)
+      getDoc(roomRef).then(snap => {
+        if (snap.data()?.gameState === 'favorite') {
+          updateDoc(roomRef, { gameState: 'results' })
+        }
+      })
+    }
+  }, [isHost, gameState, profiles, players.length, roomCode])
 
   const sendVote = async (type: 'like' | 'dislike') => {
     if (!currentProfile || hasVoted || currentProfile.id === playerName) return
 
     try {
       await ensureAuth()
-      
+
       if (type === 'like') {
         const profileRef = doc(db, 'rooms', roomCode, 'profiles', currentProfile.id)
         await updateDoc(profileRef, {
           likes: arrayUnion(playerName)
         })
       }
-      
+
       setHasVoted(true)
-      
     } catch (error) {
       console.error('Error sending vote:', error)
     }
@@ -111,31 +221,109 @@ export function VotingPage({ roomCode, playerName, onVotingComplete }: VotingPag
 
     try {
       await ensureAuth()
-      
+
       const myProfileRef = doc(db, 'rooms', roomCode, 'profiles', playerName)
       await updateDoc(myProfileRef, {
         favoritePick: profileId
       })
-      
+
       setHasPickedMatch(true)
-      console.log(`💘 Picked ${profileId} as favorite`)
     } catch (error) {
       console.error('Error sending favorite pick:', error)
     }
   }
 
-  // FAVORITE PICK PHASE - Gallery view of all profiles
+  // RESULTS PHASE
+  if (gameState === 'results') {
+    const scores = calculateScores(profiles, players)
+    const mutualMatches = scores.filter(s => s.mutualMatch)
+
+    return (
+      <div className="min-h-screen bg-lime-300 p-4">
+        <div className="max-w-md mx-auto space-y-4">
+          {/* Header */}
+          <div className="bg-white rounded-2xl border-4 border-slate-900 p-6 text-center shadow-[8px_8px_0px_#8b5cf6]">
+            <Trophy className="w-12 h-12 mx-auto mb-2 text-yellow-500" strokeWidth={3} />
+            <h1 className="font-bebas text-6xl uppercase text-slate-900">Results</h1>
+          </div>
+
+          {/* Mutual Matches */}
+          {mutualMatches.length > 0 && (
+            <div className="bg-pink-400 rounded-2xl border-4 border-slate-900 p-6 text-center shadow-[4px_4px_0px_#1e293b]">
+              <Heart className="w-10 h-10 mx-auto mb-2 text-white" strokeWidth={3} fill="white" />
+              <h2 className="font-bebas text-3xl uppercase text-white mb-2">It&apos;s a Match!</h2>
+              {mutualMatches.map(s => (
+                <p key={s.name} className="font-inter text-lg text-white font-bold">
+                  {s.name} & {s.mutualPartner}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {/* Scoreboard */}
+          <div className="space-y-3">
+            {scores.map((entry, i) => (
+              <div
+                key={entry.name}
+                className={`bg-white rounded-2xl border-4 border-slate-900 p-4 flex items-center gap-4 ${
+                  i === 0 ? 'shadow-[4px_4px_0px_#eab308]' : 'shadow-[4px_4px_0px_#1e293b]'
+                }`}
+              >
+                <div className={`w-12 h-12 rounded-full border-4 border-slate-900 flex items-center justify-center font-bebas text-2xl ${
+                  i === 0 ? 'bg-yellow-400' : i === 1 ? 'bg-slate-300' : i === 2 ? 'bg-orange-400' : 'bg-white'
+                }`}>
+                  {i === 0 ? <Crown className="w-6 h-6" strokeWidth={3} /> : i + 1}
+                </div>
+
+                <div className="flex-1">
+                  <div className="font-inter font-bold text-lg text-slate-900">
+                    {entry.name}
+                    {entry.name === playerName && <span className="text-sm text-slate-500 ml-2">(you)</span>}
+                  </div>
+                  <div className="font-inter text-sm text-slate-500">
+                    {entry.likePoints > 0 && <span>{entry.likePoints}pts likes</span>}
+                    {entry.favoritePoints > 0 && <span> + {entry.favoritePoints}pts fav</span>}
+                    {entry.mutualMatch && <span> (mutual!)</span>}
+                  </div>
+                </div>
+
+                <div className="font-bebas text-3xl text-slate-900">
+                  {entry.total}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Play Again */}
+          {isHost && (
+            <button
+              onClick={onPlayAgain}
+              className="w-full bg-green-500 text-white font-bold py-4 px-8 rounded-xl border-4 border-slate-900 shadow-[4px_4px_0px_#1e293b] hover:bg-green-600 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all uppercase text-xl"
+            >
+              Play Again
+            </button>
+          )}
+
+          {!isHost && (
+            <div className="text-center">
+              <p className="font-inter text-slate-700 font-bold">Waiting for host to start a new game...</p>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // FAVORITE PICK PHASE
   if (gameState === 'favorite') {
     return (
       <div className="min-h-screen bg-lime-300 p-4">
         <div className="max-w-4xl mx-auto">
-          {/* Header */}
           <div className="bg-white rounded-2xl border-4 border-slate-900 p-6 mb-6 text-center shadow-[8px_8px_0px_#ec4899]">
             <h1 className="font-bebas text-5xl uppercase text-slate-900 mb-2">Pick Your Favorite!</h1>
-            <p className="font-inter text-lg text-slate-700">Who was the best overall? (+5 points)</p>
+            <p className="font-inter text-lg text-slate-700">Who had the best profile?</p>
           </div>
 
-          {/* Profile Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {profiles
               .filter(p => p.id !== playerName)
@@ -150,16 +338,14 @@ export function VotingPage({ roomCode, playerName, onVotingComplete }: VotingPag
                       : 'hover:shadow-[6px_6px_0px_#1e293b] hover:-translate-y-1 active:shadow-none active:translate-y-0'
                   }`}
                 >
-                  {/* Profile Image */}
                   <div className="p-4">
-                    <img 
-                      src={profile.imageUrl} 
+                    <img
+                      src={profile.imageUrl}
                       alt={profile.name}
                       className="w-full h-48 object-contain rounded-xl border-4 border-slate-900 bg-white"
                     />
                   </div>
-                  
-                  {/* Profile Info */}
+
                   <div className="px-4 pb-4">
                     <h3 className="font-inter text-2xl font-bold text-slate-900 mb-2">{profile.name}</h3>
                     <p className="font-inter text-sm text-slate-700 line-clamp-2">{profile.bio}</p>
@@ -167,11 +353,11 @@ export function VotingPage({ roomCode, playerName, onVotingComplete }: VotingPag
                 </button>
               ))}
           </div>
-          
+
           {hasPickedMatch && (
             <div className="mt-6 text-center">
               <div className="bg-green-400 text-white font-bold text-xl py-4 px-8 rounded-xl border-4 border-slate-900 inline-block">
-                ✅ Favorite Picked! Waiting for results...
+                Favorite Picked! Waiting for results...
               </div>
             </div>
           )}
@@ -180,28 +366,13 @@ export function VotingPage({ roomCode, playerName, onVotingComplete }: VotingPag
     )
   }
 
-  // RESULTS PHASE
-  if (gameState === 'results') {
-    return (
-      <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-white rounded-2xl border-4 border-slate-900 p-8 text-center shadow-[8px_8px_0px_#8b5cf6]">
-            <div className="text-6xl mb-4">🏆</div>
-            <h2 className="font-bebas text-6xl uppercase text-slate-900 mb-4">Results!</h2>
-            <p className="font-inter text-slate-700 text-lg">Check out the final scores!</p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // LOADING / WAITING
+  // LOADING
   if (!currentProfile || profiles.length === 0) {
     return (
       <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
           <div className="bg-white rounded-2xl border-4 border-slate-900 p-8 text-center">
-            <div className="animate-pulse text-6xl mb-4">⏳</div>
+            <div className="animate-pulse text-6xl mb-4">&#x23F3;</div>
             <h2 className="font-bebas text-4xl uppercase text-slate-900 mb-2">Loading...</h2>
             <p className="font-inter text-slate-700">Waiting for profiles</p>
           </div>
@@ -212,73 +383,79 @@ export function VotingPage({ roomCode, playerName, onVotingComplete }: VotingPag
 
   const isOwnProfile = currentProfile.id === playerName
 
-  // SHOWCASE/VOTING PHASE - Players ONLY see voting buttons, NOT the profile content
-  // Profile content is ONLY shown on the Unity TV screen
+  // SHOWCASE PHASE - Profile card + voting
   return (
-    <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        
-        {/* Header Card - Shows progress */}
-        <div className="bg-white rounded-2xl border-4 border-slate-900 p-6 mb-6 text-center shadow-[8px_8px_0px_#1e293b]">
-          <div className="flex justify-between items-center mb-4">
-            <span className="font-bebas text-3xl uppercase text-slate-900">SHOWCASE</span>
+    <div className="min-h-screen bg-lime-300 flex flex-col p-4">
+      {/* Header with progress and timer */}
+      <div className="max-w-md mx-auto w-full mb-4">
+        <div className="bg-white rounded-2xl border-4 border-slate-900 p-4 flex justify-between items-center shadow-[4px_4px_0px_#1e293b]">
+          <span className="font-bebas text-3xl uppercase text-slate-900">Showcase</span>
+          <div className="flex items-center gap-3">
+            {timerEndTime && (
+              <CountdownTimer endTime={timerEndTime} />
+            )}
             <span className="font-inter font-bold text-lg bg-slate-900 text-white px-4 py-2 rounded-full">
               {showcaseIndex + 1} / {profiles.length}
             </span>
           </div>
-          <p className="font-inter text-slate-700 text-lg">
-            Vote on each profile!
-          </p>
         </div>
-        
-        {/* Voting Interface - NO profile content shown here */}
-        {isOwnProfile ? (
-          <div className="bg-white rounded-2xl border-4 border-slate-900 p-12 text-center shadow-[8px_8px_0px_#1e293b]">
-            <div className="text-8xl mb-6">🌟</div>
+      </div>
+
+      {isOwnProfile ? (
+        /* Own profile being shown */
+        <div className="max-w-md mx-auto w-full flex-1 flex items-center">
+          <div className="bg-white rounded-2xl border-4 border-slate-900 p-12 text-center shadow-[8px_8px_0px_#1e293b] w-full">
+            <div className="text-8xl mb-6">&#x1F31F;</div>
             <h2 className="font-bebas text-6xl uppercase text-slate-900 mb-4">It&apos;s Your Turn!</h2>
-            <p className="font-inter text-slate-700 text-xl">Your profile is on the screen</p>
+            <p className="font-inter text-slate-700 text-xl">Your profile is being shown</p>
           </div>
-        ) : (
-          <div className="space-y-4">
-            {/* Like Button */}
-            <button
-              onClick={() => sendVote('like')}
-              disabled={hasVoted}
-              className={`w-full py-16 rounded-3xl border-6 border-slate-900 font-bold text-3xl uppercase transition-all ${
-                hasVoted
-                  ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                  : 'bg-green-400 text-white hover:bg-green-500 hover:shadow-[8px_8px_0px_#1e293b] active:shadow-none active:translate-x-2 active:translate-y-2'
-              }`}
-            >
-              <Heart className="w-20 h-20 mx-auto mb-3" strokeWidth={3} fill={hasVoted ? undefined : "currentColor"} />
-              <div>LIKE</div>
-            </button>
+        </div>
+      ) : (
+        <>
+          {/* Profile Card */}
+          <div className="max-w-md mx-auto w-full flex-1">
+            <div className="bg-white rounded-2xl border-4 border-slate-900 overflow-hidden shadow-[8px_8px_0px_#ec4899]">
+              <img
+                src={currentProfile.imageUrl}
+                alt={currentProfile.name}
+                className="w-full aspect-square object-contain bg-white border-b-4 border-slate-900"
+              />
+              <div className="p-5">
+                <h2 className="font-bebas text-4xl uppercase text-slate-900">{currentProfile.name}</h2>
+                <p className="font-inter text-lg text-slate-700 mt-2">{currentProfile.bio}</p>
+              </div>
+            </div>
+          </div>
 
-            {/* Dislike Button */}
-            <button
-              onClick={() => sendVote('dislike')}
-              disabled={hasVoted}
-              className={`w-full py-16 rounded-3xl border-6 border-slate-900 font-bold text-3xl uppercase transition-all ${
-                hasVoted
-                  ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                  : 'bg-red-400 text-white hover:bg-red-500 hover:shadow-[8px_8px_0px_#1e293b] active:shadow-none active:translate-x-2 active:translate-y-2'
-              }`}
-            >
-              <HeartCrack className="w-20 h-20 mx-auto mb-3" strokeWidth={3} />
-              <div>NOPE</div>
-            </button>
-
-            {/* Vote Confirmation */}
-            {hasVoted && (
-              <div className="text-center mt-6">
-                <div className="bg-white text-slate-900 font-bold text-2xl py-4 px-8 rounded-2xl border-4 border-slate-900 inline-block shadow-[4px_4px_0px_#1e293b]">
-                  ✅ Vote Recorded!
+          {/* Vote Buttons - side by side */}
+          <div className="max-w-md mx-auto w-full mt-4">
+            {hasVoted ? (
+              <div className="text-center">
+                <div className="bg-white text-slate-900 font-bold text-xl py-4 px-8 rounded-2xl border-4 border-slate-900 inline-block shadow-[4px_4px_0px_#1e293b]">
+                  Vote Recorded!
                 </div>
+              </div>
+            ) : (
+              <div className="flex gap-3">
+                <button
+                  onClick={() => sendVote('dislike')}
+                  className="flex-1 py-6 rounded-2xl border-4 border-slate-900 font-bold text-2xl uppercase transition-all bg-red-400 text-white hover:bg-red-500 hover:shadow-[4px_4px_0px_#1e293b] active:shadow-none active:translate-x-1 active:translate-y-1"
+                >
+                  <HeartCrack className="w-10 h-10 mx-auto mb-1" strokeWidth={3} />
+                  Nope
+                </button>
+                <button
+                  onClick={() => sendVote('like')}
+                  className="flex-1 py-6 rounded-2xl border-4 border-slate-900 font-bold text-2xl uppercase transition-all bg-green-400 text-white hover:bg-green-500 hover:shadow-[4px_4px_0px_#1e293b] active:shadow-none active:translate-x-1 active:translate-y-1"
+                >
+                  <Heart className="w-10 h-10 mx-auto mb-1" strokeWidth={3} fill="currentColor" />
+                  Like
+                </button>
               </div>
             )}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   )
 }

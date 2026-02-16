@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { db, ensureAuth } from '../lib/firebase';
-import { doc, getDoc, updateDoc, arrayUnion, arrayRemove, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, arrayUnion, arrayRemove, onSnapshot, collection } from 'firebase/firestore';
 import { JoinPage } from './components/JoinPage';
 import { LobbyPage } from './components/LobbyPage';
 import { PreProfilePage } from './components/PreProfilePage';
@@ -40,6 +40,15 @@ const clearSession = () => {
   localStorage.removeItem('gameSession');
 };
 
+function generateRoomCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let code = '';
+  for (let i = 0; i < 4; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
 const getLastPlayerName = (): string => {
   if (typeof window === 'undefined') return '';
   return localStorage.getItem('lastPlayerName') || '';
@@ -75,9 +84,6 @@ export default function HomePage() {
   const [drawnImageUrl, setDrawnImageUrl] = useState<string>('');
   const canvasRef = useRef<any>(null);
   
-  // State for drawing tools (kept for compatibility, but not used in new DrawingCanvas)
-  const [strokeColor, setStrokeColor] = useState('black');
-  const [strokeWidth, setStrokeWidth] = useState(5);
 
   // Dev mode logic - override normal flow for UI development
   if (isDevMode && devStage) {
@@ -106,6 +112,7 @@ export default function HomePage() {
           playerName={playerName}
           setPlayerName={setPlayerName}
           onJoin={() => console.log('Dev mode join clicked')}
+          onCreateGame={() => console.log('Dev mode create clicked')}
           isLoading={false}
           error={error}
         />
@@ -159,7 +166,10 @@ export default function HomePage() {
         <VotingPage
           roomCode="ABCD"
           playerName="John"
+          isHost={true}
+          players={[{ name: 'John', score: 0 }, { name: 'Sarah', score: 0 }]}
           onVotingComplete={() => console.log('Dev mode voting complete')}
+          onPlayAgain={() => console.log('Dev mode play again')}
         />
       );
     }
@@ -205,7 +215,7 @@ export default function HomePage() {
                 setView('drawing');
               } else if (gameState === 'profile') {
                 setView('profile');
-              } else if (gameState === 'showcase' || gameState === 'voting' || gameState === 'matchpick' || gameState === 'results') {
+              } else if (gameState === 'showcase' || gameState === 'voting' || gameState === 'favorite' || gameState === 'results') {
                 setView('voting');
               } else {
                 setView('lobby'); // Default to lobby if unknown state
@@ -266,9 +276,18 @@ export default function HomePage() {
             fetchAssignedPrompts();
           }
           
-          // Check if game state changed to showcase/voting/favorite/results phases
-          if ((data.gameState === 'showcase' || data.gameState === 'voting' || data.gameState === 'favorite' || data.gameState === 'results') && view === 'profile') {
+          // Check if game state changed to showcase/favorite/results phases
+          if ((data.gameState === 'showcase' || data.gameState === 'favorite' || data.gameState === 'results') && view === 'profile') {
             setView('voting');
+          }
+
+          // Play again: return to lobby from voting
+          if (data.gameState === 'lobby' && view === 'voting') {
+            setView('lobby');
+            setDrawingSubmitted(false);
+            setProfileSubmitted(false);
+            setDrawingCompleted(false);
+            setDrawnImageUrl('');
           }
         } else {
           // Room was deleted (host disconnected)
@@ -329,6 +348,66 @@ export default function HomePage() {
     };
   }, [view, roomCode, playerName]);
 
+  // Host: detect all submissions and shuffle assignments (pre-profile → profile)
+  useEffect(() => {
+    if (view !== 'drawing' || !roomCode || !gameData || gameData.host !== playerName) return;
+
+    const submissionsRef = collection(db, 'rooms', roomCode, 'submissions');
+    const unsubscribe = onSnapshot(submissionsRef, async (snapshot) => {
+      const submissions = snapshot.docs.map(d => ({
+        playerName: d.id,
+        persona: d.data().persona,
+        quirk: d.data().quirk,
+      }));
+
+      if (submissions.length >= gameData.players.length && gameData.players.length >= 2) {
+        // Check guard to prevent double-shuffle
+        const roomRef = doc(db, 'rooms', roomCode);
+        const roomSnap = await getDoc(roomRef);
+        if (roomSnap.data()?.assignmentsCreated) return;
+
+        // Shuffle: rotate by 1 so no one gets their own
+        for (let i = 0; i < submissions.length; i++) {
+          const recipient = submissions[i].playerName;
+          const donor = submissions[(i + 1) % submissions.length];
+          const assignmentRef = doc(db, 'rooms', roomCode, 'assignments', recipient);
+          await setDoc(assignmentRef, {
+            assignedPersona: donor.persona,
+            assignedQuirk: donor.quirk,
+          });
+        }
+
+        await updateDoc(roomRef, {
+          gameState: 'profile',
+          assignmentsCreated: true,
+        });
+      }
+    });
+
+    return () => unsubscribe();
+  }, [view, roomCode, gameData?.host, gameData?.players.length, playerName]);
+
+  // Host: detect all profiles submitted (profile → showcase)
+  useEffect(() => {
+    if (view !== 'profile' || !roomCode || !gameData || gameData.host !== playerName) return;
+
+    const profilesRef = collection(db, 'rooms', roomCode, 'profiles');
+    const unsubscribe = onSnapshot(profilesRef, async (snapshot) => {
+      if (snapshot.docs.length >= gameData.players.length && gameData.players.length >= 2) {
+        const roomRef = doc(db, 'rooms', roomCode);
+        const roomSnap = await getDoc(roomRef);
+        if (roomSnap.data()?.gameState === 'showcase') return; // Already advanced
+
+        await updateDoc(roomRef, {
+          gameState: 'showcase',
+          showcaseIndex: 0,
+        });
+      }
+    });
+
+    return () => unsubscribe();
+  }, [view, roomCode, gameData?.host, gameData?.players.length, playerName]);
+
   const handleJoinGame = async () => {
     const upperRoomCode = roomCode.toUpperCase().trim();
     if (!upperRoomCode || !playerName) {
@@ -376,6 +455,50 @@ export default function HomePage() {
     }
   };
 
+  const handleCreateGame = async () => {
+    if (!playerName) {
+      setError('Please enter your name.');
+      return;
+    }
+
+    setIsLoading(true);
+    setError('');
+
+    try {
+      await ensureAuth();
+
+      // Generate a unique room code
+      let code = generateRoomCode();
+      let attempts = 0;
+      while (attempts < 10) {
+        const roomRef = doc(db, 'rooms', code);
+        const existing = await getDoc(roomRef);
+        if (!existing.exists()) break;
+        code = generateRoomCode();
+        attempts++;
+      }
+
+      const roomRef = doc(db, 'rooms', code);
+      await setDoc(roomRef, {
+        gameState: 'lobby',
+        players: [{ name: playerName, score: 0 }],
+        host: playerName,
+        showcaseIndex: 0,
+        createdAt: new Date(),
+      });
+
+      setRoomCode(code);
+      setLastPlayerName(playerName);
+      setSession({ roomCode: code, playerName });
+      setView('lobby');
+    } catch (err) {
+      console.error(err);
+      setError('Failed to create game. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleStartGame = async () => {
     if (gameData?.host !== playerName) return;
     
@@ -399,6 +522,7 @@ export default function HomePage() {
         playerName={playerName}
         setPlayerName={setPlayerName}
         onJoin={handleJoinGame}
+        onCreateGame={handleCreateGame}
         isLoading={isLoading}
         error={error}
       />
@@ -436,9 +560,7 @@ export default function HomePage() {
           persona,
           quirk,
           submittedAt: new Date()
-        }).catch(async (err) => {
-          // If document doesn't exist, create it with setDoc
-          const { setDoc } = await import('firebase/firestore');
+        }).catch(async () => {
           await setDoc(submissionRef, {
             persona,
             quirk,
@@ -479,7 +601,6 @@ export default function HomePage() {
         const roomRef = doc(db, "rooms", roomCode);
         const profileRef = doc(roomRef, "profiles", playerName);
         
-        const { setDoc } = await import('firebase/firestore');
         await setDoc(profileRef, {
           name: profileName,
           bio: profileBio,
@@ -529,7 +650,17 @@ export default function HomePage() {
       <VotingPage
         roomCode={roomCode}
         playerName={playerName}
+        isHost={gameData?.host === playerName}
+        players={gameData?.players || []}
         onVotingComplete={handleVotingComplete}
+        onPlayAgain={async () => {
+          const roomRef = doc(db, 'rooms', roomCode);
+          await updateDoc(roomRef, {
+            gameState: 'lobby',
+            showcaseIndex: 0,
+            assignmentsCreated: false,
+          });
+        }}
       />
     );
   }
