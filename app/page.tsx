@@ -8,6 +8,8 @@ import { LobbyPage } from './components/LobbyPage';
 import { PreProfilePage } from './components/PreProfilePage';
 import { ProfilePage } from './components/ProfilePage';
 import { VotingPage } from './components/VotingPage';
+import { MuteToggle } from './components/MuteToggle';
+import { sfx } from '../lib/sfx';
 
 interface Player {
   name: string;
@@ -58,6 +60,19 @@ const setLastPlayerName = (name: string) => {
   localStorage.setItem('lastPlayerName', name);
 };
 
+function LeaveGameButton({ onLeave }: { onLeave: () => void }) {
+  return (
+    <div className="fixed bottom-4 right-4 z-50">
+      <button
+        onClick={onLeave}
+        className="bg-white text-red-500 font-inter text-xs font-bold uppercase px-3 py-2 rounded-lg border-2 border-slate-300 opacity-50 hover:opacity-100 hover:border-red-500 transition-all"
+      >
+        Leave Game
+      </button>
+    </div>
+  );
+}
+
 export default function HomePage() {
   // Dev mode check
   const isDevMode = typeof window !== 'undefined' && window.location.search.includes('dev=true');
@@ -83,7 +98,9 @@ export default function HomePage() {
   const [drawingCompleted, setDrawingCompleted] = useState(false);
   const [drawnImageUrl, setDrawnImageUrl] = useState<string>('');
   const canvasRef = useRef<any>(null);
-  
+  const [roundEndTime, setRoundEndTime] = useState<Date | null>(null);
+  const [profileEndTime, setProfileEndTime] = useState<Date | null>(null);
+
 
   // Dev mode logic - override normal flow for UI development
   if (isDevMode && devStage) {
@@ -126,6 +143,7 @@ export default function HomePage() {
           gameData={mockGameData}
           playerName="John"
           onStartGame={() => console.log('Dev mode start game clicked')}
+          onLeaveGame={() => console.log('Dev mode leave game')}
         />
       );
     }
@@ -174,6 +192,11 @@ export default function HomePage() {
       );
     }
   }
+
+  // Preload SFX on mount
+  useEffect(() => {
+    sfx.preloadAll()
+  }, [])
 
   // This effect runs ONCE when the app loads to check for a reconnect
   useEffect(() => {
@@ -257,22 +280,32 @@ export default function HomePage() {
       roomRef, 
       (docSnap) => {
         if (docSnap.exists()) {
-          const data = docSnap.data() as GameData;
+          const data = docSnap.data() as GameData & { roundEndTime?: unknown; profileEndTime?: unknown };
           setGameData(data);
-          
+
+          // Track timer end times from room doc
+          if (data.roundEndTime) {
+            const ret = (data.roundEndTime as { toDate?: () => Date });
+            setRoundEndTime(ret.toDate ? ret.toDate() : new Date(data.roundEndTime as string));
+          }
+          if (data.profileEndTime) {
+            const pet = (data.profileEndTime as { toDate?: () => Date });
+            setProfileEndTime(pet.toDate ? pet.toDate() : new Date(data.profileEndTime as string));
+          }
+
           // Check if game state changed to pre-profile (drawing phase)
           if (data.gameState === 'pre-profile' && view === 'lobby') {
+            sfx.play('gameStart');
             setView('drawing');
-            setDrawingSubmitted(false); // Reset drawing submission state
+            setDrawingSubmitted(false);
           }
-          
+
           // Check if game state changed to profile (profile creation phase)
           if (data.gameState === 'profile' && view === 'drawing') {
             setView('profile');
-            setProfileSubmitted(false); // Reset profile submission state
-            setDrawingCompleted(false); // Reset drawing completion state
-            setDrawnImageUrl(''); // Reset drawn image URL
-            // Fetch the assigned prompts for this player
+            setProfileSubmitted(false);
+            setDrawingCompleted(false);
+            setDrawnImageUrl('');
             fetchAssignedPrompts();
           }
           
@@ -360,11 +393,28 @@ export default function HomePage() {
         quirk: d.data().quirk,
       }));
 
-      if (submissions.length >= gameData.players.length && gameData.players.length >= 2) {
-        // Check guard to prevent double-shuffle
-        const roomRef = doc(db, 'rooms', roomCode);
-        const roomSnap = await getDoc(roomRef);
-        if (roomSnap.data()?.assignmentsCreated) return;
+      // Check if all submitted or if roundEndTime has passed
+      const roomRef = doc(db, 'rooms', roomCode);
+      const roomSnap = await getDoc(roomRef);
+      if (roomSnap.data()?.assignmentsCreated) return;
+
+      const roundEnd = roomSnap.data()?.roundEndTime;
+      const roundExpired = roundEnd && (roundEnd.toDate ? roundEnd.toDate() : new Date(roundEnd)).getTime() < Date.now();
+      const allSubmitted = submissions.length >= gameData.players.length && gameData.players.length >= 2;
+
+      if (allSubmitted || (roundExpired && submissions.length > 0 && gameData.players.length >= 2)) {
+        // Fill in defaults for missing players
+        for (const player of gameData.players) {
+          if (!submissions.find(s => s.playerName === player.name)) {
+            const submissionRef = doc(db, 'rooms', roomCode, 'submissions', player.name);
+            await setDoc(submissionRef, {
+              persona: 'Mystery Person',
+              quirk: 'being mysterious',
+              submittedAt: new Date(),
+            });
+            submissions.push({ playerName: player.name, persona: 'Mystery Person', quirk: 'being mysterious' });
+          }
+        }
 
         // Shuffle: rotate by 1 so no one gets their own
         for (let i = 0; i < submissions.length; i++) {
@@ -377,9 +427,13 @@ export default function HomePage() {
           });
         }
 
+        const profileEnd = new Date();
+        profileEnd.setSeconds(profileEnd.getSeconds() + 120);
+
         await updateDoc(roomRef, {
           gameState: 'profile',
           assignmentsCreated: true,
+          profileEndTime: profileEnd,
         });
       }
     });
@@ -387,16 +441,40 @@ export default function HomePage() {
     return () => unsubscribe();
   }, [view, roomCode, gameData?.host, gameData?.players.length, playerName]);
 
-  // Host: detect all profiles submitted (profile → showcase)
+  // Host: detect all profiles submitted or timeout (profile → showcase)
   useEffect(() => {
     if (view !== 'profile' || !roomCode || !gameData || gameData.host !== playerName) return;
 
     const profilesRef = collection(db, 'rooms', roomCode, 'profiles');
     const unsubscribe = onSnapshot(profilesRef, async (snapshot) => {
-      if (snapshot.docs.length >= gameData.players.length && gameData.players.length >= 2) {
-        const roomRef = doc(db, 'rooms', roomCode);
-        const roomSnap = await getDoc(roomRef);
-        if (roomSnap.data()?.gameState === 'showcase') return; // Already advanced
+      const roomRef = doc(db, 'rooms', roomCode);
+      const roomSnap = await getDoc(roomRef);
+      if (roomSnap.data()?.gameState === 'showcase') return;
+
+      const profEnd = roomSnap.data()?.profileEndTime;
+      const profileExpired = profEnd && (profEnd.toDate ? profEnd.toDate() : new Date(profEnd)).getTime() < Date.now();
+      const allSubmitted = snapshot.docs.length >= gameData.players.length && gameData.players.length >= 2;
+
+      if (allSubmitted || (profileExpired && gameData.players.length >= 2)) {
+        // Fill in default profiles for missing players
+        const submittedNames = new Set(snapshot.docs.map(d => d.id));
+        for (const player of gameData.players) {
+          if (!submittedNames.has(player.name)) {
+            const assignmentRef = doc(db, 'rooms', roomCode, 'assignments', player.name);
+            const assignSnap = await getDoc(assignmentRef);
+            const assignData = assignSnap.exists() ? assignSnap.data() : {};
+            const profileRef = doc(db, 'rooms', roomCode, 'profiles', player.name);
+            await setDoc(profileRef, {
+              name: assignData?.assignedPersona || 'Mystery Person',
+              bio: 'Being mysterious...',
+              imageUrl: '',
+              persona: assignData?.assignedPersona || '',
+              quirk: assignData?.assignedQuirk || '',
+              likes: [],
+              submittedAt: new Date(),
+            });
+          }
+        }
 
         await updateDoc(roomRef, {
           gameState: 'showcase',
@@ -443,6 +521,7 @@ export default function HomePage() {
         // Save the successful session
         setLastPlayerName(playerName);
         setSession({ roomCode: upperRoomCode, playerName });
+        sfx.play('join');
         setView('lobby');
       } else {
         setError("That room doesn't exist. Check your code!");
@@ -490,6 +569,7 @@ export default function HomePage() {
       setRoomCode(code);
       setLastPlayerName(playerName);
       setSession({ roomCode: code, playerName });
+      sfx.play('join');
       setView('lobby');
     } catch (err) {
       console.error(err);
@@ -497,6 +577,36 @@ export default function HomePage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleLeaveGame = async () => {
+    try {
+      await ensureAuth();
+      const roomRef = doc(db, "rooms", roomCode);
+      const docSnap = await getDoc(roomRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const updatedPlayers = data.players?.filter((p: Player) => p.name !== playerName) || [];
+        if (updatedPlayers.length === 0) {
+          // Last player leaving — could delete room, but just leave it
+          await updateDoc(roomRef, { players: updatedPlayers });
+        } else {
+          // If leaving player is host, transfer host to next player
+          const updates: Record<string, unknown> = { players: updatedPlayers };
+          if (data.host === playerName) {
+            updates.host = updatedPlayers[0].name;
+          }
+          await updateDoc(roomRef, updates);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to leave game:', err);
+    }
+    clearSession();
+    setView('join');
+    setRoomCode('');
+    setGameData(null);
+    setError('');
   };
 
   const handleStartGame = async () => {
@@ -531,12 +641,16 @@ export default function HomePage() {
 
   if (view === 'lobby') {
     return (
-      <LobbyPage
-        roomCode={roomCode}
-        gameData={gameData}
-        playerName={playerName}
-        onStartGame={handleStartGame}
-      />
+      <>
+        <LobbyPage
+          roomCode={roomCode}
+          gameData={gameData}
+          playerName={playerName}
+          onStartGame={handleStartGame}
+          onLeaveGame={handleLeaveGame}
+        />
+        <MuteToggle />
+      </>
     );
   }
 
@@ -568,20 +682,48 @@ export default function HomePage() {
           });
         });
         
-        setError(''); // Clear any errors
-        setDrawingSubmitted(true); // Show waiting screen
+        setError('');
+        sfx.play('submit');
+        setDrawingSubmitted(true);
       } catch (err) {
         console.error('Failed to submit:', err);
         setError('Failed to submit. Please try again.');
       }
     };
 
+    const handleAutoSubmitIdeas = async () => {
+      if (drawingSubmitted) return;
+      const persona = (document.getElementById('persona') as HTMLInputElement)?.value || 'Mystery Person';
+      const quirk = (document.getElementById('quirk') as HTMLInputElement)?.value || 'being mysterious';
+
+      try {
+        await ensureAuth();
+        const roomRef = doc(db, "rooms", roomCode);
+        const submissionRef = doc(roomRef, "submissions", playerName);
+        await setDoc(submissionRef, {
+          persona,
+          quirk,
+          submittedAt: new Date()
+        });
+        setError('');
+        setDrawingSubmitted(true);
+      } catch (err) {
+        console.error('Auto-submit failed:', err);
+      }
+    };
+
     return (
-      <PreProfilePage
-        onSubmitIdeas={handleSubmitIdeas}
-        preProfileSubmitted={drawingSubmitted}
-        error={error}
-      />
+      <>
+        <PreProfilePage
+          onSubmitIdeas={handleSubmitIdeas}
+          preProfileSubmitted={drawingSubmitted}
+          error={error}
+          roundEndTime={roundEndTime}
+          onAutoSubmit={handleAutoSubmitIdeas}
+        />
+        <LeaveGameButton onLeave={handleLeaveGame} />
+        <MuteToggle />
+      </>
     );
   }
 
@@ -611,32 +753,63 @@ export default function HomePage() {
           submittedAt: new Date()
         });
         
-        console.log(`Profile submitted: ${profileName}, ${profileBio}`);
-        setError(''); // Clear errors
-        setProfileSubmitted(true); // Switch to the "Waiting" screen
+        setError('');
+        sfx.play('submit');
+        setProfileSubmitted(true);
       } catch (err) {
         console.error('Failed to submit profile:', err);
         setError('Failed to submit profile. Please try again.');
       }
     };
 
+    const handleAutoSubmitProfile = async () => {
+      if (profileSubmitted) return;
+
+      try {
+        await ensureAuth();
+        const roomRef = doc(db, "rooms", roomCode);
+        const profileRef = doc(roomRef, "profiles", playerName);
+
+        await setDoc(profileRef, {
+          name: profileName.trim() || assignedPersona || 'Mystery Person',
+          bio: profileBio.trim() || 'Being mysterious...',
+          imageUrl: drawnImageUrl || '',
+          persona: assignedPersona,
+          quirk: assignedQuirk,
+          likes: [],
+          submittedAt: new Date()
+        });
+
+        setError('');
+        setProfileSubmitted(true);
+      } catch (err) {
+        console.error('Auto-submit profile failed:', err);
+      }
+    };
+
     return (
-      <ProfilePage
-        assignedPersona={assignedPersona}
-        assignedQuirk={assignedQuirk}
-        profileName={profileName}
-        setProfileName={setProfileName}
-        profileBio={profileBio}
-        setProfileBio={setProfileBio}
-        onDrawingComplete={handleDrawingComplete}
-        onSubmitProfile={handleSubmitProfile}
-        drawingCompleted={drawingCompleted}
-        drawnImageUrl={drawnImageUrl}
-        profileSubmitted={profileSubmitted}
-        error={error}
-        roomCode={roomCode}
-        playerName={playerName}
-      />
+      <>
+        <ProfilePage
+          assignedPersona={assignedPersona}
+          assignedQuirk={assignedQuirk}
+          profileName={profileName}
+          setProfileName={setProfileName}
+          profileBio={profileBio}
+          setProfileBio={setProfileBio}
+          onDrawingComplete={handleDrawingComplete}
+          onSubmitProfile={handleSubmitProfile}
+          drawingCompleted={drawingCompleted}
+          drawnImageUrl={drawnImageUrl}
+          profileSubmitted={profileSubmitted}
+          error={error}
+          roomCode={roomCode}
+          playerName={playerName}
+          profileEndTime={profileEndTime}
+          onAutoSubmitProfile={handleAutoSubmitProfile}
+        />
+        <LeaveGameButton onLeave={handleLeaveGame} />
+        <MuteToggle />
+      </>
     );
   }
 
@@ -647,21 +820,25 @@ export default function HomePage() {
     };
 
     return (
-      <VotingPage
-        roomCode={roomCode}
-        playerName={playerName}
-        isHost={gameData?.host === playerName}
-        players={gameData?.players || []}
-        onVotingComplete={handleVotingComplete}
-        onPlayAgain={async () => {
-          const roomRef = doc(db, 'rooms', roomCode);
-          await updateDoc(roomRef, {
-            gameState: 'lobby',
-            showcaseIndex: 0,
-            assignmentsCreated: false,
-          });
-        }}
-      />
+      <>
+        <VotingPage
+          roomCode={roomCode}
+          playerName={playerName}
+          isHost={gameData?.host === playerName}
+          players={gameData?.players || []}
+          onVotingComplete={handleVotingComplete}
+          onPlayAgain={async () => {
+            const roomRef = doc(db, 'rooms', roomCode);
+            await updateDoc(roomRef, {
+              gameState: 'lobby',
+              showcaseIndex: 0,
+              assignmentsCreated: false,
+            });
+          }}
+        />
+        <LeaveGameButton onLeave={handleLeaveGame} />
+        <MuteToggle />
+      </>
     );
   }
 

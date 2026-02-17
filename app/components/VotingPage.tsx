@@ -1,10 +1,11 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { Heart, HeartCrack, Trophy, Crown } from 'lucide-react'
 import { db, ensureAuth } from '../../lib/firebase'
 import { doc, collection, onSnapshot, updateDoc, arrayUnion, getDoc } from 'firebase/firestore'
 import { CountdownTimer } from './CountdownTimer'
+import { sfx } from '../../lib/sfx'
 
 interface Player {
   name: string
@@ -41,6 +42,7 @@ interface ScoreEntry {
 }
 
 const SHOWCASE_SECONDS = 15
+const FAVORITE_SECONDS = 30
 
 function calculateScores(profiles: Profile[], players: Player[]): ScoreEntry[] {
   const scores: Record<string, ScoreEntry> = {}
@@ -65,7 +67,7 @@ function calculateScores(profiles: Profile[], players: Player[]): ScoreEntry[] {
 
     const pickedProfile = profiles.find(p => p.id === profile.favoritePick)
     if (pickedProfile?.favoritePick === profile.id) {
-      // Mutual match: +25 + 10 bonus for the picked player
+      // Mutual match: +35
       if (!scores[profile.id].mutualMatch) {
         scores[profile.id].mutualMatch = true
         scores[profile.id].mutualPartner = profile.favoritePick
@@ -90,6 +92,10 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
   const [hasVoted, setHasVoted] = useState<boolean>(false)
   const [hasPickedMatch, setHasPickedMatch] = useState<boolean>(false)
   const [timerEndTime, setTimerEndTime] = useState<Date | null>(null)
+  const [favoriteEndTime, setFavoriteEndTime] = useState<Date | null>(null)
+  const [imagesPreloaded, setImagesPreloaded] = useState<boolean>(false)
+  const favoriteAutoPickedRef = useRef(false)
+  const resultsPlayedRef = useRef(false)
 
   // Listen to room state changes
   useEffect(() => {
@@ -102,6 +108,7 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
 
         if (newGameState === 'favorite' && gameState !== 'favorite') {
           setHasPickedMatch(false)
+          favoriteAutoPickedRef.current = false
         }
 
         setGameState(newGameState)
@@ -109,6 +116,9 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
 
         if (data.timerEndTime) {
           setTimerEndTime(data.timerEndTime.toDate ? data.timerEndTime.toDate() : new Date(data.timerEndTime))
+        }
+        if (data.favoriteEndTime) {
+          setFavoriteEndTime(data.favoriteEndTime.toDate ? data.favoriteEndTime.toDate() : new Date(data.favoriteEndTime))
         }
       }
     })
@@ -139,17 +149,49 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
     return () => unsubscribe()
   }, [roomCode])
 
+  // Preload images when entering showcase
+  useEffect(() => {
+    if (gameState !== 'showcase' || profiles.length === 0 || imagesPreloaded) return
+
+    let loaded = 0
+    const total = profiles.filter(p => p.imageUrl).length
+    if (total === 0) {
+      setImagesPreloaded(true)
+      return
+    }
+
+    const timeout = setTimeout(() => {
+      setImagesPreloaded(true)
+    }, 10000)
+
+    profiles.forEach(profile => {
+      if (!profile.imageUrl) return
+      const img = new Image()
+      img.onload = img.onerror = () => {
+        loaded++
+        if (loaded >= total) {
+          clearTimeout(timeout)
+          setImagesPreloaded(true)
+        }
+      }
+      img.src = profile.imageUrl
+    })
+
+    return () => clearTimeout(timeout)
+  }, [gameState, profiles.length, imagesPreloaded])
+
   // Update current profile when showcase index changes
   useEffect(() => {
     if (showcaseIndex >= 0 && showcaseIndex < profiles.length) {
       setCurrentProfile(profiles[showcaseIndex])
       setHasVoted(false)
+      sfx.play('showcaseWhoosh')
     }
   }, [showcaseIndex, profiles.length])
 
-  // Host: auto-advance showcase with timer
+  // Host: auto-advance showcase with timer (waits for preload)
   useEffect(() => {
-    if (!isHost || gameState !== 'showcase' || profiles.length === 0) return
+    if (!isHost || gameState !== 'showcase' || profiles.length === 0 || !imagesPreloaded) return
 
     const advanceShowcase = async () => {
       const roomRef = doc(db, 'rooms', roomCode)
@@ -164,7 +206,12 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
         })
       } else {
         // All profiles shown, move to favorite pick
-        await updateDoc(roomRef, { gameState: 'favorite' })
+        const favEnd = new Date()
+        favEnd.setSeconds(favEnd.getSeconds() + FAVORITE_SECONDS)
+        await updateDoc(roomRef, {
+          gameState: 'favorite',
+          favoriteEndTime: favEnd,
+        })
       }
     }
 
@@ -178,9 +225,9 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
 
     const timer = setTimeout(advanceShowcase, SHOWCASE_SECONDS * 1000)
     return () => clearTimeout(timer)
-  }, [isHost, gameState, showcaseIndex, profiles.length, roomCode])
+  }, [isHost, gameState, showcaseIndex, profiles.length, roomCode, imagesPreloaded])
 
-  // Host: detect all favorite picks → advance to results
+  // Host: detect all favorite picks -> advance to results
   useEffect(() => {
     if (!isHost || gameState !== 'favorite') return
 
@@ -197,6 +244,24 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
     }
   }, [isHost, gameState, profiles, players.length, roomCode])
 
+  // Host: force-advance to results after favorite timer expires + 2s grace
+  useEffect(() => {
+    if (!isHost || gameState !== 'favorite' || !favoriteEndTime) return
+
+    const msUntilExpire = favoriteEndTime.getTime() - Date.now() + 2000
+    if (msUntilExpire <= 0) return
+
+    const timer = setTimeout(async () => {
+      const roomRef = doc(db, 'rooms', roomCode)
+      const snap = await getDoc(roomRef)
+      if (snap.data()?.gameState === 'favorite') {
+        await updateDoc(roomRef, { gameState: 'results' })
+      }
+    }, msUntilExpire)
+
+    return () => clearTimeout(timer)
+  }, [isHost, gameState, favoriteEndTime, roomCode])
+
   const sendVote = async (type: 'like' | 'dislike') => {
     if (!currentProfile || hasVoted || currentProfile.id === playerName) return
 
@@ -210,13 +275,14 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
         })
       }
 
+      sfx.play(type === 'like' ? 'voteLike' : 'voteNope')
       setHasVoted(true)
     } catch (error) {
       console.error('Error sending vote:', error)
     }
   }
 
-  const sendFavoritePick = async (profileId: string) => {
+  const sendFavoritePick = useCallback(async (profileId: string) => {
     if (hasPickedMatch || profileId === playerName) return
 
     try {
@@ -231,10 +297,25 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
     } catch (error) {
       console.error('Error sending favorite pick:', error)
     }
-  }
+  }, [hasPickedMatch, playerName, roomCode])
+
+  // Auto-pick favorite when timer expires
+  const handleFavoriteExpired = useCallback(() => {
+    if (hasPickedMatch || favoriteAutoPickedRef.current) return
+    favoriteAutoPickedRef.current = true
+
+    const firstNonSelf = profiles.find(p => p.id !== playerName)
+    if (firstNonSelf) {
+      sendFavoritePick(firstNonSelf.id)
+    }
+  }, [hasPickedMatch, profiles, playerName, sendFavoritePick])
 
   // RESULTS PHASE
   if (gameState === 'results') {
+    if (!resultsPlayedRef.current) {
+      resultsPlayedRef.current = true
+      sfx.play('resultsReveal')
+    }
     const scores = calculateScores(profiles, players)
     const mutualMatches = scores.filter(s => s.mutualMatch)
 
@@ -322,6 +403,11 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
           <div className="bg-white rounded-2xl border-4 border-slate-900 p-6 mb-6 text-center shadow-[8px_8px_0px_#ec4899]">
             <h1 className="font-bebas text-5xl uppercase text-slate-900 mb-2">Pick Your Favorite!</h1>
             <p className="font-inter text-lg text-slate-700">Who had the best profile?</p>
+            {favoriteEndTime && (
+              <div className="mt-3">
+                <CountdownTimer endTime={favoriteEndTime} onExpired={handleFavoriteExpired} />
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -342,7 +428,7 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
                     <img
                       src={profile.imageUrl}
                       alt={profile.name}
-                      className="w-full h-48 object-contain rounded-xl border-4 border-slate-900 bg-white"
+                      className="w-full aspect-square object-contain rounded-xl border-4 border-slate-900 bg-white"
                     />
                   </div>
 
@@ -366,15 +452,19 @@ export function VotingPage({ roomCode, playerName, isHost, players, onVotingComp
     )
   }
 
-  // LOADING
-  if (!currentProfile || profiles.length === 0) {
+  // LOADING / PRELOADING
+  if (!currentProfile || profiles.length === 0 || !imagesPreloaded) {
     return (
       <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
           <div className="bg-white rounded-2xl border-4 border-slate-900 p-8 text-center">
             <div className="animate-pulse text-6xl mb-4">&#x23F3;</div>
-            <h2 className="font-bebas text-4xl uppercase text-slate-900 mb-2">Loading...</h2>
-            <p className="font-inter text-slate-700">Waiting for profiles</p>
+            <h2 className="font-bebas text-4xl uppercase text-slate-900 mb-2">
+              {profiles.length > 0 && !imagesPreloaded ? 'Loading Images...' : 'Loading...'}
+            </h2>
+            <p className="font-inter text-slate-700">
+              {profiles.length > 0 && !imagesPreloaded ? 'Preparing the showcase' : 'Waiting for profiles'}
+            </p>
           </div>
         </div>
       </div>

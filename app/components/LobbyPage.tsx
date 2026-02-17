@@ -14,6 +14,7 @@ interface LobbyPageProps {
   gameData: GameData | null;
   playerName: string;
   onStartGame: () => void;
+  onLeaveGame: () => void;
 }
 
 const playerColors = ['bg-pink-500', 'bg-cyan-400', 'bg-purple-600', 'bg-orange-400', 'bg-lime-500', 'bg-rose-500'];
@@ -22,7 +23,8 @@ export function LobbyPage({
   roomCode,
   gameData,
   playerName,
-  onStartGame
+  onStartGame,
+  onLeaveGame
 }: LobbyPageProps) {
   return (
     <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
@@ -40,7 +42,12 @@ export function LobbyPage({
               Game Code
             </p>
           </div>
-          
+
+          <div className="mb-6 bg-cyan-200 rounded-xl border-4 border-slate-900 p-4 text-center">
+            <p className="font-inter text-sm font-bold text-slate-500 uppercase tracking-widest">You are</p>
+            <p className="font-bebas text-4xl uppercase text-slate-900">{playerName}</p>
+          </div>
+
           <div className="mb-8">
             <h2 className="font-inter text-sm font-bold text-slate-900 mb-6 uppercase tracking-widest">Players:</h2>
             <div className="grid grid-cols-2 gap-6">
@@ -55,15 +62,22 @@ export function LobbyPage({
                   'shadow-[6px_6px_0px_#f43f5e]',  // rose
                 ];
                 
+                const isMe = player.name === playerName;
+
                 return (
-                  <div 
-                    key={player.name} 
-                    className={`relative ${playerColors[index % playerColors.length]} p-8 rounded-xl text-white border-4 border-slate-900 transform ${rotations[index % rotations.length]} ${shadows[index % shadows.length]} hover:scale-105 transition-transform flex items-center justify-center min-h-[120px]`}
+                  <div
+                    key={player.name}
+                    className={`relative ${playerColors[index % playerColors.length]} p-8 rounded-xl text-white border-4 ${isMe ? 'border-yellow-300 ring-4 ring-yellow-300' : 'border-slate-900'} transform ${rotations[index % rotations.length]} ${shadows[index % shadows.length]} hover:scale-105 transition-transform flex items-center justify-center min-h-[120px]`}
                   >
                     <span className="font-bebas text-5xl uppercase tracking-tight text-center leading-none">{player.name}</span>
                     {player.name === gameData.host && (
                       <span className="absolute -top-3 -right-3 bg-yellow-300 text-slate-900 px-3 py-1 rounded-full text-xs font-bold border-2 border-slate-900 uppercase transform rotate-12">
                         👑 Host
+                      </span>
+                    )}
+                    {isMe && (
+                      <span className="absolute -bottom-3 -left-3 bg-white text-slate-900 px-3 py-1 rounded-full text-xs font-bold border-2 border-slate-900 uppercase transform -rotate-6">
+                        You
                       </span>
                     )}
                   </div>
@@ -74,12 +88,20 @@ export function LobbyPage({
 
           <div className="text-center">
             {gameData?.host === playerName ? (
+              <>
               <button
                 onClick={onStartGame}
-                className="w-full bg-purple-600 text-white font-bold py-4 px-8 rounded-xl border-4 border-slate-900 shadow-[4px_4px_0px_#1e293b] hover:bg-purple-700 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all uppercase text-2xl"
+                disabled={(gameData?.players.length ?? 0) < 2}
+                className="w-full bg-purple-600 text-white font-bold py-4 px-8 rounded-xl border-4 border-slate-900 shadow-[4px_4px_0px_#1e293b] hover:bg-purple-700 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all uppercase text-2xl disabled:opacity-50 disabled:cursor-not-allowed disabled:active:shadow-[4px_4px_0px_#1e293b] disabled:active:translate-x-0 disabled:active:translate-y-0"
               >
                 Start Game
               </button>
+              {(gameData?.players.length ?? 0) < 2 && (
+                <p className="font-inter text-sm font-bold text-slate-500 mt-3 uppercase">
+                  Need at least 2 players to start
+                </p>
+              )}
+              </>
             ) : (
               <div className="p-6 bg-cyan-200 rounded-xl border-4 border-slate-900">
                 <p className="font-inter text-lg font-bold text-slate-900 uppercase">
@@ -89,6 +111,13 @@ export function LobbyPage({
             )}
           </div>
         </div>
+
+          <button
+            onClick={onLeaveGame}
+            className="mt-4 w-full font-inter text-sm font-bold text-slate-500 uppercase hover:text-red-500 transition-colors py-2"
+          >
+            Leave Game
+          </button>
       </div>
     </div>
   );

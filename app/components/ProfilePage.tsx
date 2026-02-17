@@ -1,4 +1,5 @@
 import { DrawingCanvas } from './DrawingCanvas';
+import { CountdownTimer } from './CountdownTimer';
 
 interface ProfilePageProps {
   assignedPersona: string;
@@ -15,6 +16,8 @@ interface ProfilePageProps {
   error: string;
   roomCode: string;
   playerName: string;
+  profileEndTime?: Date | null;
+  onAutoSubmitProfile?: () => void;
 }
 
 export function ProfilePage({
@@ -31,7 +34,9 @@ export function ProfilePage({
   profileSubmitted,
   error,
   roomCode,
-  playerName
+  playerName,
+  profileEndTime,
+  onAutoSubmitProfile
 }: ProfilePageProps) {
   // --- "Waiting" Screen ---
   if (profileSubmitted) {
@@ -58,12 +63,19 @@ export function ProfilePage({
         <div className="w-full max-w-lg">
           {/* Profile Card */}
           <div className="bg-white rounded-2xl shadow-lg border-4 border-slate-900 overflow-hidden">
+            {/* Timer */}
+            {profileEndTime && (
+              <div className="flex justify-center pt-4">
+                <CountdownTimer endTime={profileEndTime} onExpired={onAutoSubmitProfile} />
+              </div>
+            )}
+
             {/* Profile Image - Clear and visible */}
             <div className="relative bg-white p-6">
-              <img 
-                src={drawnImageUrl} 
+              <img
+                src={drawnImageUrl}
                 alt="Profile"
-                className="w-full h-80 object-contain"
+                className="w-full aspect-square object-contain"
               />
             </div>
 
@@ -84,7 +96,7 @@ export function ProfilePage({
                   style={{ color: 'black' }}
                 />
               </div>
-              
+
               {/* Bio Input */}
               <div>
                 <label className="block font-inter text-lg font-bold text-slate-900 mb-2 uppercase">
@@ -100,7 +112,7 @@ export function ProfilePage({
                   style={{ color: 'black' }}
                 />
               </div>
-              
+
               {/* Submit Button */}
               <button
                 onClick={onSubmitProfile}
@@ -109,7 +121,7 @@ export function ProfilePage({
               >
                 Submit
               </button>
-              
+
               {error && (
                 <div className="mt-4 p-3 bg-red-400 border-4 border-slate-900 rounded-xl">
                   <div className="text-white font-bold text-center uppercase">{error}</div>
@@ -121,16 +133,23 @@ export function ProfilePage({
       </div>
     );
   }
-  
+
   // --- Phase 1: Drawing Canvas (just prompt + drawing tools + checkmark) ---
   return (
-    <DrawingCanvas
-      assignedPersona={assignedPersona}
-      assignedQuirk={assignedQuirk}
-      onDrawingComplete={onDrawingComplete}
-      disabled={false}
-      roomCode={roomCode}
-      playerName={playerName}
-    />
+    <div className="relative">
+      {profileEndTime && (
+        <div className="fixed top-4 right-4 z-50">
+          <CountdownTimer endTime={profileEndTime} onExpired={onAutoSubmitProfile} />
+        </div>
+      )}
+      <DrawingCanvas
+        assignedPersona={assignedPersona}
+        assignedQuirk={assignedQuirk}
+        onDrawingComplete={onDrawingComplete}
+        disabled={false}
+        roomCode={roomCode}
+        playerName={playerName}
+      />
+    </div>
   );
 }

@@ -1,13 +1,19 @@
+import { CountdownTimer } from './CountdownTimer'
+
 interface PreProfilePageProps {
   onSubmitIdeas: () => void;
   preProfileSubmitted: boolean;
   error: string;
+  roundEndTime?: Date | null;
+  onAutoSubmit?: () => void;
 }
 
 export function PreProfilePage({
   onSubmitIdeas,
   preProfileSubmitted,
-  error
+  error,
+  roundEndTime,
+  onAutoSubmit
 }: PreProfilePageProps) {
   // --- "Waiting" Screen for Pre-Profile Phase ---
   if (preProfileSubmitted) {
@@ -34,13 +40,19 @@ export function PreProfilePage({
           <div className="absolute -top-4 -left-4 bg-pink-400 text-white font-bold px-4 py-2 rounded-full text-sm border-2 border-slate-900 uppercase">
             Round 1
           </div>
-          
+
+          {roundEndTime && (
+            <div className="absolute -top-4 -right-4">
+              <CountdownTimer endTime={roundEndTime} onExpired={onAutoSubmit} />
+            </div>
+          )}
+
           <div className="text-center mb-8">
             <h1 className="font-bebas text-6xl sm:text-7xl uppercase text-slate-900 mb-4">
               Who? Doing What?
             </h1>
           </div>
-          
+
           <div className="space-y-5">
             <div>
               <label htmlFor="persona" className="block font-inter text-lg font-bold text-slate-900 mb-2 uppercase">
@@ -54,7 +66,7 @@ export function PreProfilePage({
                 style={{ color: 'black' }}
               />
             </div>
-            
+
             <div>
               <label htmlFor="quirk" className="block font-inter text-lg font-bold text-slate-900 mb-2 uppercase">
                 Doing What?
@@ -67,7 +79,7 @@ export function PreProfilePage({
                 style={{ color: 'black' }}
               />
             </div>
-            
+
             <button
               onClick={onSubmitIdeas}
               className="w-full bg-pink-500 text-white font-bold py-4 px-8 rounded-xl border-4 border-slate-900 shadow-[4px_4px_0px_#1e293b] hover:bg-pink-600 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all uppercase text-2xl"
@@ -75,7 +87,7 @@ export function PreProfilePage({
               Submit
             </button>
           </div>
-          
+
           {error && (
             <div className="mt-6 p-3 bg-red-400 border-4 border-slate-900 rounded-xl">
               <div className="text-white font-bold text-center uppercase">{error}</div>
