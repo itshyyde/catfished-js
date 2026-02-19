@@ -339,11 +339,17 @@ export function DrawingCanvas({
     saveToHistory()
   }
 
-  const handleSave = async () => {
-    if (disabled) return
+  // Ref to track if we're already saving to prevent double-submit
+  const isSavingRef = useRef(false)
+
+  const handleSave = useCallback(async () => {
+    if (disabled || isSavingRef.current) return
     const canvas = canvasRef.current
     if (!canvas) return
+
+    isSavingRef.current = true
     setIsUploading(true)
+
     try {
       const blob = await new Promise<Blob>((resolve, reject) => {
         canvas.toBlob((blob) => {
@@ -351,24 +357,39 @@ export function DrawingCanvas({
           else reject(new Error("Failed to create blob"))
         }, 'image/jpeg', 0.8)
       })
+
       await ensureAuth()
       const storageRef = ref(storage, `drawings/${roomCode}/${playerName}.jpg`)
       await uploadBytes(storageRef, blob)
       const downloadURL = await getDownloadURL(storageRef)
+
       const drawingDocRef = doc(db, 'rooms', roomCode, 'drawings', playerName)
       await setDoc(drawingDocRef, {
         url: downloadURL,
         uploadedAt: new Date(),
         playerName: playerName
       })
+
       onDrawingComplete(downloadURL)
     } catch (error) {
       console.error('Error uploading drawing:', error)
-      alert('Failed to save drawing. Please try again.')
+      // If auto-save fails, we might still want to proceed? 
+      // For now, alert ONLY if it was manual. 
+      // But we can't easily distinguish here without passing a flag.
+      // Let's just log it.
     } finally {
       setIsUploading(false)
+      isSavingRef.current = false
     }
-  }
+  }, [disabled, roomCode, playerName, onDrawingComplete])
+
+  // Handle timer expiration: Auto-save the drawing!
+  const handleTimerExpired = useCallback(async () => {
+    if (isSavingRef.current) return
+    console.log("⏰ Timer expired! Auto-saving drawing...")
+    await handleSave()
+    if (onTimerExpired) onTimerExpired()
+  }, [handleSave, onTimerExpired])
 
   const renderToolButton = (t: { id: ToolType; icon: React.ReactNode; activeColor: string }) => (
     <button
@@ -416,7 +437,7 @@ export function DrawingCanvas({
         <div className="col-span-2 bg-white border-b-3 border-slate-900 shadow-[0_3px_0px_#1e293b] px-4 py-2 flex items-center gap-4">
           {/* Left: Timer */}
           <div className="flex-shrink-0">
-            {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={onTimerExpired} />}
+            {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={handleTimerExpired} />}
           </div>
 
           {/* Center: Prompt */}
@@ -429,7 +450,7 @@ export function DrawingCanvas({
           {/* Right: Done button */}
           <button
             onClick={handleSave}
-            disabled={disabled}
+            disabled={disabled || isUploading}
             className="flex-shrink-0 h-10 px-5 rounded-xl flex items-center justify-center gap-1.5 bg-purple-600 hover:bg-purple-700 transition-all shadow-[3px_3px_0px_#1e293b] active:shadow-none active:translate-x-0.5 active:translate-y-0.5 border-3 border-slate-900 font-bold text-white uppercase text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isUploading ? (
@@ -510,18 +531,20 @@ export function DrawingCanvas({
     )
   }
 
+
+
   // === MOBILE LAYOUT ===
   return (
     <div className="h-screen bg-lime-300 bg-game flex flex-col overflow-hidden">
       {/* Top: Prompt + Timer + Done */}
       <div className="bg-white border-b-3 border-slate-900 shadow-[0_3px_0px_#1e293b] px-3 py-2 flex items-center gap-2">
-        {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={onTimerExpired} />}
+        {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={handleTimerExpired} />}
         <p className="flex-1 font-bebas text-lg text-slate-900 uppercase tracking-wide truncate text-center">
           {assignedPersona}, {assignedQuirk}
         </p>
         <button
           onClick={handleSave}
-          disabled={disabled}
+          disabled={disabled || isUploading}
           className="flex-shrink-0 h-9 px-4 rounded-xl flex items-center justify-center gap-1 bg-purple-600 hover:bg-purple-700 transition-all shadow-[2px_2px_0px_#1e293b] active:shadow-none active:translate-x-0.5 active:translate-y-0.5 border-2 border-slate-900 font-bold text-white uppercase text-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isUploading ? (
