@@ -749,7 +749,7 @@ function HomePageInner({ roomCode, setRoomCode }: { roomCode: string; setRoomCod
       }
     };
 
-    const handleAutoSubmitProfile = async () => {
+    const handleAutoSubmitProfile = async (url?: string) => {
       if (profileSubmitted) return;
 
       try {
@@ -760,7 +760,7 @@ function HomePageInner({ roomCode, setRoomCode }: { roomCode: string; setRoomCod
         await setDoc(profileRef, {
           name: profileName.trim() || assignedPersona || 'Mystery Person',
           bio: profileBio.trim() || 'Being mysterious...',
-          imageUrl: drawnImageUrl || '',
+          imageUrl: url || drawnImageUrl || '',
           persona: assignedPersona,
           quirk: assignedQuirk,
           likes: [],

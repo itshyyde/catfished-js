@@ -17,7 +17,7 @@ interface ProfilePageProps {
   roomCode: string;
   playerName: string;
   profileEndTime?: Date | null;
-  onAutoSubmitProfile?: () => void;
+  onAutoSubmitProfile?: (url?: string) => void;
 }
 
 export function ProfilePage({
@@ -66,7 +66,7 @@ export function ProfilePage({
             {/* Timer */}
             {profileEndTime && (
               <div className="flex justify-center pt-4">
-                <CountdownTimer endTime={profileEndTime} totalDuration={120} onExpired={onAutoSubmitProfile} />
+                <CountdownTimer endTime={profileEndTime} totalDuration={120} onExpired={onAutoSubmitProfile} showWarning={false} />
               </div>
             )}
 

@@ -7,9 +7,10 @@ interface CountdownTimerProps {
   endTime: Date
   totalDuration?: number
   onExpired?: () => void
+  showWarning?: boolean
 }
 
-export function CountdownTimer({ endTime, totalDuration = 30, onExpired }: CountdownTimerProps) {
+export function CountdownTimer({ endTime, totalDuration = 30, onExpired, showWarning = false }: CountdownTimerProps) {
   const { serverNow } = useServerTime()
   const [timeLeft, setTimeLeft] = useState(0)
   const [mounted, setMounted] = useState(false)
@@ -65,24 +66,26 @@ export function CountdownTimer({ endTime, totalDuration = 30, onExpired }: Count
         />
 
         {/* Number badge (optional, but good to keep for clarity) */}
-        <div className={`absolute top-4 right-4 bg-white/90 backdrop-blur border-2 border-slate-900 px-3 py-1 rounded-full font-bebas text-xl text-slate-900 shadow-md ${isUrgent ? 'animate-pulse text-red-600 border-red-600' : ''}`}>
+        <div className={`absolute top-4 right-4 bg-white/90 backdrop-blur border-2 border-slate-900 px-3 py-1 rounded-full font-bebas text-xl text-slate-900 shadow-md ${isUrgent && showWarning ? 'animate-pulse text-red-600 border-red-600' : ''}`}>
           {timeLeft}s
         </div>
       </div>
 
       {/* Low Time Warning Overlay - Red Vignette */}
-      <div
-        className={`fixed inset-0 pointer-events-none transition-opacity duration-500 z-40 
-          ${isUrgent ? 'opacity-100' : 'opacity-0'}`}
-        style={{
-          background: 'radial-gradient(circle, transparent 60%, rgba(220, 38, 38, 0.4) 100%)',
-          boxShadow: 'inset 0 0 50px rgba(220, 38, 38, 0.5)'
-        }}
-      >
-        {isCritical && (
-          <div className="absolute inset-0 bg-red-500/10 animate-pulse" />
-        )}
-      </div>
+      {showWarning && (
+        <div
+          className={`fixed inset-0 pointer-events-none transition-opacity duration-500 z-40 
+            ${isUrgent ? 'opacity-100' : 'opacity-0'}`}
+          style={{
+            background: 'radial-gradient(circle, transparent 60%, rgba(220, 38, 38, 0.4) 100%)',
+            boxShadow: 'inset 0 0 50px rgba(220, 38, 38, 0.5)'
+          }}
+        >
+          {isCritical && (
+            <div className="absolute inset-0 bg-red-500/10 animate-pulse" />
+          )}
+        </div>
+      )}
     </>
   )
 }

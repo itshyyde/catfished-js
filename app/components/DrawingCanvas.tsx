@@ -342,7 +342,7 @@ export function DrawingCanvas({
   // Ref to track if we're already saving to prevent double-submit
   const isSavingRef = useRef(false)
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (): Promise<string | void> => {
     if (disabled || isSavingRef.current) return
     const canvas = canvasRef.current
     if (!canvas) return
@@ -371,6 +371,7 @@ export function DrawingCanvas({
       })
 
       onDrawingComplete(downloadURL)
+      return downloadURL
     } catch (error) {
       console.error('Error uploading drawing:', error)
       // If auto-save fails, we might still want to proceed? 
@@ -387,8 +388,11 @@ export function DrawingCanvas({
   const handleTimerExpired = useCallback(async () => {
     if (isSavingRef.current) return
     console.log("⏰ Timer expired! Auto-saving drawing...")
-    await handleSave()
-    if (onTimerExpired) onTimerExpired()
+    const url = await handleSave()
+    if (onTimerExpired) {
+      // @ts-ignore - Allow passing the URL even if strict types complain initially
+      onTimerExpired(url)
+    }
   }, [handleSave, onTimerExpired])
 
   const renderToolButton = (t: { id: ToolType; icon: React.ReactNode; activeColor: string }) => (
@@ -437,7 +441,7 @@ export function DrawingCanvas({
         <div className="col-span-2 bg-white border-b-3 border-slate-900 shadow-[0_3px_0px_#1e293b] px-4 py-2 flex items-center gap-4">
           {/* Left: Timer */}
           <div className="flex-shrink-0">
-            {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={handleTimerExpired} />}
+            {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={handleTimerExpired} showWarning={true} />}
           </div>
 
           {/* Center: Prompt */}
@@ -449,7 +453,7 @@ export function DrawingCanvas({
 
           {/* Right: Done button */}
           <button
-            onClick={handleSave}
+            onClick={() => handleSave()}
             disabled={disabled || isUploading}
             className="flex-shrink-0 h-10 px-5 rounded-xl flex items-center justify-center gap-1.5 bg-purple-600 hover:bg-purple-700 transition-all shadow-[3px_3px_0px_#1e293b] active:shadow-none active:translate-x-0.5 active:translate-y-0.5 border-3 border-slate-900 font-bold text-white uppercase text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -538,12 +542,12 @@ export function DrawingCanvas({
     <div className="h-screen bg-lime-300 bg-game flex flex-col overflow-hidden">
       {/* Top: Prompt + Timer + Done */}
       <div className="bg-white border-b-3 border-slate-900 shadow-[0_3px_0px_#1e293b] px-3 py-2 flex items-center gap-2">
-        {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={handleTimerExpired} />}
+        {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={handleTimerExpired} showWarning={true} />}
         <p className="flex-1 font-bebas text-lg text-slate-900 uppercase tracking-wide truncate text-center">
           {assignedPersona}, {assignedQuirk}
         </p>
         <button
-          onClick={handleSave}
+          onClick={() => handleSave()}
           disabled={disabled || isUploading}
           className="flex-shrink-0 h-9 px-4 rounded-xl flex items-center justify-center gap-1 bg-purple-600 hover:bg-purple-700 transition-all shadow-[2px_2px_0px_#1e293b] active:shadow-none active:translate-x-0.5 active:translate-y-0.5 border-2 border-slate-900 font-bold text-white uppercase text-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
