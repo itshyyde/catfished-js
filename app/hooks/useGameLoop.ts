@@ -135,19 +135,25 @@ export function useGameLoop(
                     const players = roomData?.players || []
                     for (const player of players) {
                         if (!submittedNames.has(player.name)) {
-                            const assignmentRef = doc(db, 'rooms', roomCode, 'assignments', player.name)
-                            const assignSnap = await getDoc(assignmentRef)
-                            const assignData = assignSnap.exists() ? assignSnap.data() : {}
+                            // double check if it really doesn't exist (in case local snapshot is stale)
                             const profileRef = doc(db, 'rooms', roomCode, 'profiles', player.name)
-                            await setDoc(profileRef, {
-                                name: assignData?.assignedPersona || 'Mystery Person',
-                                bio: 'Being mysterious...',
-                                imageUrl: '',
-                                persona: assignData?.assignedPersona || '',
-                                quirk: assignData?.assignedQuirk || '',
-                                likes: [],
-                                submittedAt: new Date(),
-                            })
+                            const profileSnap = await getDoc(profileRef)
+
+                            if (!profileSnap.exists()) {
+                                const assignmentRef = doc(db, 'rooms', roomCode, 'assignments', player.name)
+                                const assignSnap = await getDoc(assignmentRef)
+                                const assignData = assignSnap.exists() ? assignSnap.data() : {}
+
+                                await setDoc(profileRef, {
+                                    name: assignData?.assignedPersona || 'Mystery Person',
+                                    bio: 'Being mysterious...',
+                                    imageUrl: '',
+                                    persona: assignData?.assignedPersona || '',
+                                    quirk: assignData?.assignedQuirk || '',
+                                    likes: [],
+                                    submittedAt: new Date(),
+                                })
+                            }
                         }
                     }
 
