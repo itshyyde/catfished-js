@@ -41,7 +41,7 @@ export function ProfilePage({
   // --- "Waiting" Screen ---
   if (profileSubmitted) {
     return (
-      <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-lime-300 bg-game flex items-center justify-center p-4">
         <div className="w-full max-w-2xl">
           <div className="bg-white p-8 rounded-2xl border-4 border-slate-900 text-center transform rotate-3 shadow-[8px_8px_0px_#a855f7]">
             <h1 className="font-bebas text-8xl uppercase text-slate-900 mb-4">
@@ -59,14 +59,14 @@ export function ProfilePage({
   // --- Phase 2: Submission Form (shows drawn image + name/bio inputs) ---
   if (drawingCompleted) {
     return (
-      <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-lime-300 bg-game flex items-center justify-center p-4">
         <div className="w-full max-w-lg">
           {/* Profile Card */}
-          <div className="bg-white rounded-2xl shadow-lg border-4 border-slate-900 overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-[6px_6px_0px_#1e293b] border-4 border-slate-900 overflow-hidden">
             {/* Timer */}
             {profileEndTime && (
               <div className="flex justify-center pt-4">
-                <CountdownTimer endTime={profileEndTime} onExpired={onAutoSubmitProfile} />
+                <CountdownTimer endTime={profileEndTime} totalDuration={120} onExpired={onAutoSubmitProfile} />
               </div>
             )}
 
@@ -136,20 +136,16 @@ export function ProfilePage({
 
   // --- Phase 1: Drawing Canvas (just prompt + drawing tools + checkmark) ---
   return (
-    <div className="relative">
-      {profileEndTime && (
-        <div className="fixed top-4 right-4 z-50">
-          <CountdownTimer endTime={profileEndTime} onExpired={onAutoSubmitProfile} />
-        </div>
-      )}
-      <DrawingCanvas
-        assignedPersona={assignedPersona}
-        assignedQuirk={assignedQuirk}
-        onDrawingComplete={onDrawingComplete}
-        disabled={false}
-        roomCode={roomCode}
-        playerName={playerName}
-      />
-    </div>
+    <DrawingCanvas
+      assignedPersona={assignedPersona}
+      assignedQuirk={assignedQuirk}
+      onDrawingComplete={onDrawingComplete}
+      disabled={false}
+      roomCode={roomCode}
+      playerName={playerName}
+      endTime={profileEndTime}
+      totalDuration={120}
+      onTimerExpired={onAutoSubmitProfile}
+    />
   );
 }

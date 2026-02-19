@@ -27,13 +27,13 @@ export function LobbyPage({
   onLeaveGame
 }: LobbyPageProps) {
   return (
-    <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-lime-300 bg-game flex items-center justify-center p-4">
       <div className="w-full max-w-3xl">
-        <div className="bg-white p-8 rounded-2xl shadow-lg border-4 border-slate-900 relative">
+        <div className="bg-white p-8 rounded-2xl shadow-[6px_6px_0px_#1e293b] border-4 border-slate-900 relative">
           <div className="absolute -top-4 -right-4 bg-yellow-300 text-slate-900 font-bold px-4 py-2 rounded-full text-sm border-2 border-slate-900 uppercase">
             Lobby
           </div>
-          
+
           <div className="text-center mb-8">
             <h1 className="font-bebas text-8xl uppercase tracking-tight text-slate-900 mb-2" style={{ WebkitTextStroke: '3px white' }}>
               {roomCode.toUpperCase()}
@@ -41,11 +41,6 @@ export function LobbyPage({
             <p className="font-inter text-lg text-slate-700 uppercase font-bold">
               Game Code
             </p>
-          </div>
-
-          <div className="mb-6 bg-cyan-200 rounded-xl border-4 border-slate-900 p-4 text-center">
-            <p className="font-inter text-sm font-bold text-slate-500 uppercase tracking-widest">You are</p>
-            <p className="font-bebas text-4xl uppercase text-slate-900">{playerName}</p>
           </div>
 
           <div className="mb-8">
@@ -61,7 +56,7 @@ export function LobbyPage({
                   'shadow-[6px_6px_0px_#84cc16]',  // lime
                   'shadow-[6px_6px_0px_#f43f5e]',  // rose
                 ];
-                
+
                 const isMe = player.name === playerName;
 
                 return (
@@ -89,18 +84,18 @@ export function LobbyPage({
           <div className="text-center">
             {gameData?.host === playerName ? (
               <>
-              <button
-                onClick={onStartGame}
-                disabled={(gameData?.players.length ?? 0) < 2}
-                className="w-full bg-purple-600 text-white font-bold py-4 px-8 rounded-xl border-4 border-slate-900 shadow-[4px_4px_0px_#1e293b] hover:bg-purple-700 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all uppercase text-2xl disabled:opacity-50 disabled:cursor-not-allowed disabled:active:shadow-[4px_4px_0px_#1e293b] disabled:active:translate-x-0 disabled:active:translate-y-0"
-              >
-                Start Game
-              </button>
-              {(gameData?.players.length ?? 0) < 2 && (
-                <p className="font-inter text-sm font-bold text-slate-500 mt-3 uppercase">
-                  Need at least 2 players to start
-                </p>
-              )}
+                <button
+                  onClick={onStartGame}
+                  disabled={(gameData?.players.length ?? 0) < 2}
+                  className="w-full bg-purple-600 text-white font-bold py-4 px-8 rounded-xl border-4 border-slate-900 shadow-[4px_4px_0px_#1e293b] hover:bg-purple-700 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all uppercase text-2xl disabled:opacity-50 disabled:cursor-not-allowed disabled:active:shadow-[4px_4px_0px_#1e293b] disabled:active:translate-x-0 disabled:active:translate-y-0"
+                >
+                  Start Game
+                </button>
+                {(gameData?.players.length ?? 0) < 2 && (
+                  <p className="font-inter text-sm font-bold text-slate-500 mt-3 uppercase">
+                    Need at least 2 players to start
+                  </p>
+                )}
               </>
             ) : (
               <div className="p-6 bg-cyan-200 rounded-xl border-4 border-slate-900">
@@ -112,12 +107,12 @@ export function LobbyPage({
           </div>
         </div>
 
-          <button
-            onClick={onLeaveGame}
-            className="mt-4 w-full font-inter text-sm font-bold text-slate-500 uppercase hover:text-red-500 transition-colors py-2"
-          >
-            Leave Game
-          </button>
+        <button
+          onClick={onLeaveGame}
+          className="mt-4 w-full font-inter text-sm font-bold text-slate-500 uppercase hover:text-red-500 transition-colors py-2"
+        >
+          Leave Game
+        </button>
       </div>
     </div>
   );

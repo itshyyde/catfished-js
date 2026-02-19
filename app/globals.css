@@ -32,3 +32,320 @@ body {
 .font-inter {
   font-family: var(--font-inter);
 }
+
+/* Dot-grid background texture */
+.bg-game {
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.08) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Card entrance animation for showcase */
+@keyframes card-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-card-enter {
+  animation: card-enter 0.5s ease-out both;
+}
+
+/* Staggered entrance for results */
+@keyframes slide-up {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.4s ease-out both;
+}
+
+/* Premium metallic gloss shimmer */
+@keyframes match-gloss {
+  0% {
+    transform: translateX(-180%) rotate(25deg);
+  }
+
+  100% {
+    transform: translateX(180%) rotate(25deg);
+  }
+}
+
+.animate-match-gloss {
+  position: relative;
+  overflow: hidden;
+  /* Subtle metallic base sheen */
+  background-image: linear-gradient(135deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.05) 40%,
+      rgba(255, 255, 255, 0.1) 50%,
+      rgba(255, 255, 255, 0.05) 60%,
+      rgba(255, 255, 255, 0) 100%);
+}
+
+.animate-match-gloss::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(90deg,
+      transparent 0%,
+      transparent 35%,
+      rgba(255, 255, 255, 0.1) 40%,
+      rgba(255, 255, 255, 0.3) 44%,
+      rgba(255, 255, 255, 0.6) 48%,
+      rgba(255, 255, 255, 0.8) 50%,
+      rgba(255, 255, 255, 0.6) 52%,
+      rgba(255, 255, 255, 0.3) 56%,
+      rgba(255, 255, 255, 0.1) 60%,
+      transparent 65%,
+      transparent 100%);
+  transform: translateX(-180%) rotate(25deg);
+  animation: match-gloss 2.5s ease-in-out 1;
+  animation-delay: 2.5s;
+  pointer-events: none;
+}
+
+/* Full-screen match overlay background burst */
+@keyframes match-bg-burst {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+
+  30% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+
+  45% {
+    transform: scale(1);
+  }
+
+  75% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+.animate-match-bg-burst {
+  animation: match-bg-burst 3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Match emoji bounce-in */
+@keyframes match-emoji-bounce {
+  0% {
+    opacity: 0;
+    transform: scale(0) rotate(-15deg);
+  }
+
+  40% {
+    opacity: 1;
+    transform: scale(1.4) rotate(8deg);
+  }
+
+  60% {
+    transform: scale(0.9) rotate(-5deg);
+  }
+
+  75% {
+    transform: scale(1.15) rotate(3deg);
+  }
+
+  90% {
+    transform: scale(0.95) rotate(-1deg);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+.animate-match-emoji-bounce {
+  animation: match-emoji-bounce 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s both;
+}
+
+/* Match text slide up with blur */
+@keyframes match-text-slide {
+  0% {
+    opacity: 0;
+    transform: translateY(30px);
+    filter: blur(8px);
+  }
+
+  60% {
+    opacity: 1;
+    transform: translateY(-4px);
+    filter: blur(0px);
+  }
+
+  80% {
+    transform: translateY(2px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0px);
+  }
+}
+
+.animate-match-text-slide {
+  animation: match-text-slide 0.7s ease-out 0.7s both;
+}
+
+/* Pulsing glow on match text */
+@keyframes match-glow-pulse {
+  0%,
+  100% {
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.4), 0 0 30px rgba(255, 255, 255, 0.2);
+  }
+
+  50% {
+    text-shadow: 0 0 20px rgba(255, 255, 255, 0.8), 0 0 50px rgba(255, 255, 255, 0.4), 0 0 80px rgba(236, 72, 153, 0.3);
+  }
+}
+
+.animate-match-glow-pulse {
+  animation: match-glow-pulse 1.2s ease-in-out infinite 1.2s;
+}
+
+/* Sparkle spin for pseudo-elements */
+@keyframes match-sparkle-spin {
+  0% {
+    opacity: 0;
+    transform: scale(0) rotate(0deg);
+  }
+
+  30% {
+    opacity: 1;
+    transform: scale(1.2) rotate(90deg);
+  }
+
+  70% {
+    opacity: 1;
+    transform: scale(1) rotate(270deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(0.5) rotate(360deg);
+  }
+}
+
+/* Conic gradient burst lines */
+@keyframes match-burst-lines {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(0deg);
+  }
+
+  20% {
+    opacity: 0.6;
+  }
+
+  50% {
+    opacity: 0.4;
+    transform: scale(1.5) rotate(30deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(2) rotate(60deg);
+  }
+}
+
+.animate-match-burst-lines {
+  background: conic-gradient(from 0deg,
+      transparent 0deg,
+      rgba(255, 255, 255, 0.3) 10deg,
+      transparent 20deg,
+      transparent 40deg,
+      rgba(255, 255, 255, 0.2) 50deg,
+      transparent 60deg,
+      transparent 80deg,
+      rgba(255, 255, 255, 0.3) 90deg,
+      transparent 100deg,
+      transparent 120deg,
+      rgba(255, 255, 255, 0.2) 130deg,
+      transparent 140deg,
+      transparent 160deg,
+      rgba(255, 255, 255, 0.3) 170deg,
+      transparent 180deg,
+      transparent 200deg,
+      rgba(255, 255, 255, 0.2) 210deg,
+      transparent 220deg,
+      transparent 240deg,
+      rgba(255, 255, 255, 0.3) 250deg,
+      transparent 260deg,
+      transparent 280deg,
+      rgba(255, 255, 255, 0.2) 290deg,
+      transparent 300deg,
+      transparent 320deg,
+      rgba(255, 255, 255, 0.3) 330deg,
+      transparent 340deg,
+      transparent 360deg);
+  animation: match-burst-lines 2.5s ease-out forwards;
+}
+
+/* Gloss shimmer sweep for match overlay */
+@keyframes match-overlay-gloss {
+  0% {
+    transform: translateX(-180%) rotate(25deg);
+  }
+
+  100% {
+    transform: translateX(180%) rotate(25deg);
+  }
+}
+
+/* Inline match text that fades in then out inside the row (kept for per-row highlight) */
+@keyframes match-text-flash {
+  0% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+
+  15% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+
+  25% {
+    transform: scale(1);
+  }
+
+  65% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+.animate-match-text {
+  animation: match-text-flash 2s ease-out forwards;
+}

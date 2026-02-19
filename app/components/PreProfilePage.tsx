@@ -6,6 +6,7 @@ interface PreProfilePageProps {
   error: string;
   roundEndTime?: Date | null;
   onAutoSubmit?: () => void;
+  currentRound?: number;
 }
 
 export function PreProfilePage({
@@ -13,12 +14,13 @@ export function PreProfilePage({
   preProfileSubmitted,
   error,
   roundEndTime,
-  onAutoSubmit
+  onAutoSubmit,
+  currentRound = 1,
 }: PreProfilePageProps) {
   // --- "Waiting" Screen for Pre-Profile Phase ---
   if (preProfileSubmitted) {
     return (
-      <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-lime-300 bg-game flex items-center justify-center p-4">
         <div className="w-full max-w-2xl">
           <div className="bg-white p-8 rounded-2xl border-4 border-slate-900 text-center transform -rotate-2 shadow-[8px_8px_0px_#ec4899]">
             <h1 className="font-bebas text-8xl uppercase text-slate-900 mb-4">
@@ -34,16 +36,16 @@ export function PreProfilePage({
   }
 
   return (
-    <div className="min-h-screen bg-lime-300 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-lime-300 bg-game flex items-center justify-center p-4">
       <div className="w-full max-w-2xl">
-        <div className="bg-white p-8 rounded-2xl shadow-lg border-4 border-slate-900 relative">
+        <div className="bg-white p-8 rounded-2xl shadow-[6px_6px_0px_#1e293b] border-4 border-slate-900 relative">
           <div className="absolute -top-4 -left-4 bg-pink-400 text-white font-bold px-4 py-2 rounded-full text-sm border-2 border-slate-900 uppercase">
-            Round 1
+            Round {currentRound}
           </div>
 
           {roundEndTime && (
             <div className="absolute -top-4 -right-4">
-              <CountdownTimer endTime={roundEndTime} onExpired={onAutoSubmit} />
+              <CountdownTimer endTime={roundEndTime} totalDuration={65} onExpired={onAutoSubmit} />
             </div>
           )}
 

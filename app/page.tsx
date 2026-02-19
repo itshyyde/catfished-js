@@ -2,13 +2,15 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { db, ensureAuth } from '../lib/firebase';
-import { doc, getDoc, setDoc, updateDoc, arrayUnion, arrayRemove, onSnapshot, collection } from 'firebase/firestore';
+import { doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, onSnapshot, collection } from 'firebase/firestore';
 import { JoinPage } from './components/JoinPage';
 import { LobbyPage } from './components/LobbyPage';
 import { PreProfilePage } from './components/PreProfilePage';
 import { ProfilePage } from './components/ProfilePage';
 import { VotingPage } from './components/VotingPage';
 import { MuteToggle } from './components/MuteToggle';
+import { ServerTimeProvider, useServerTime } from './components/ServerTimeProvider';
+import { useGameLoop } from './hooks/useGameLoop';
 import { sfx } from '../lib/sfx';
 
 interface Player {
@@ -20,6 +22,7 @@ interface GameData {
   gameState: string;
   players: Player[];
   host: string;
+  currentRound?: number;
 }
 
 interface GameSession {
@@ -60,6 +63,23 @@ const setLastPlayerName = (name: string) => {
   localStorage.setItem('lastPlayerName', name);
 };
 
+
+function ForceNextPhaseButton({ onForce, isHost }: { onForce: () => void; isHost: boolean }) {
+  if (!isHost) return null
+
+  return (
+    <div className="fixed bottom-4 left-4 z-50">
+      <button
+        onClick={onForce}
+        className="bg-yellow-400 text-slate-900 font-inter text-xs font-bold uppercase px-3 py-2 rounded-lg border-2 border-slate-900 shadow-[2px_2px_0px_#1e293b] hover:bg-yellow-300 active:shadow-none active:translate-x-0.5 active:translate-y-0.5 transition-all flex items-center gap-1"
+      >
+        <span>⚡</span>
+        <span>Force Next Phase</span>
+      </button>
+    </div>
+  );
+}
+
 function LeaveGameButton({ onLeave }: { onLeave: () => void }) {
   return (
     <div className="fixed bottom-4 right-4 z-50">
@@ -74,21 +94,29 @@ function LeaveGameButton({ onLeave }: { onLeave: () => void }) {
 }
 
 export default function HomePage() {
+  const [roomCode, setRoomCode] = useState('');
+  return (
+    <ServerTimeProvider roomCode={roomCode}>
+      <HomePageInner roomCode={roomCode} setRoomCode={setRoomCode} />
+    </ServerTimeProvider>
+  );
+}
+
+function HomePageInner({ roomCode, setRoomCode }: { roomCode: string; setRoomCode: (v: string) => void }) {
+  const { serverNow } = useServerTime();
   // Dev mode check
   const isDevMode = typeof window !== 'undefined' && window.location.search.includes('dev=true');
   const devStage = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('stage') : null;
-
-  const [roomCode, setRoomCode] = useState('');
   const [playerName, setPlayerName] = useState(''); // Will be set after client-side mount
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  
+
   const [gameData, setGameData] = useState<GameData | null>(null);
   const [view, setView] = useState<'join' | 'lobby' | 'drawing' | 'profile' | 'voting'>('join');
-  
+
   // State for the drawing (pre-profile) phase
   const [drawingSubmitted, setDrawingSubmitted] = useState(false);
-  
+
   // State for the profile drawing phase
   const [assignedPersona, setAssignedPersona] = useState('');
   const [assignedQuirk, setAssignedQuirk] = useState('');
@@ -100,6 +128,13 @@ export default function HomePage() {
   const canvasRef = useRef<any>(null);
   const [roundEndTime, setRoundEndTime] = useState<Date | null>(null);
   const [profileEndTime, setProfileEndTime] = useState<Date | null>(null);
+
+  // ============================================================================
+  // HOST-DRIVEN GAME LOOP
+  // Only the Host can write to gameState - all others are read-only listeners
+  // ============================================================================
+  const isHost = gameData?.host === playerName
+  const { forceNextPhase } = useGameLoop(roomCode, playerName, isHost, gameData)
 
 
   // Dev mode logic - override normal flow for UI development
@@ -178,7 +213,7 @@ export default function HomePage() {
         />
       );
     }
-    
+
     if (devStage === 'voting') {
       return (
         <VotingPage
@@ -223,13 +258,13 @@ export default function HomePage() {
           if (docSnap.exists()) {
             const data = docSnap.data();
             const isPlayerInRoom = data.players?.some((p: Player) => p.name === session.playerName);
-            
+
             if (isPlayerInRoom) {
               // The room exists and the player is still in it. Let's reconnect!
               console.log('✅ Restoring session for room:', session.roomCode);
               setRoomCode(session.roomCode);
               setPlayerName(session.playerName);
-              
+
               // Restore to the correct view based on game state
               const gameState = data.gameState;
               if (gameState === 'lobby') {
@@ -277,7 +312,7 @@ export default function HomePage() {
 
     const roomRef = doc(db, "rooms", roomCode);
     const unsubscribe = onSnapshot(
-      roomRef, 
+      roomRef,
       (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data() as GameData & { roundEndTime?: unknown; profileEndTime?: unknown };
@@ -293,11 +328,19 @@ export default function HomePage() {
             setProfileEndTime(pet.toDate ? pet.toDate() : new Date(data.profileEndTime as string));
           }
 
-          // Check if game state changed to pre-profile (drawing phase)
-          if (data.gameState === 'pre-profile' && view === 'lobby') {
+          // Check if game state changed to pre-profile (drawing phase) — from lobby or voting (next round)
+          if (data.gameState === 'pre-profile' && (view === 'lobby' || view === 'voting')) {
             sfx.play('gameStart');
             setView('drawing');
             setDrawingSubmitted(false);
+            // Reset profile state for new round
+            setProfileSubmitted(false);
+            setDrawingCompleted(false);
+            setDrawnImageUrl('');
+            setAssignedPersona('');
+            setAssignedQuirk('');
+            setProfileName('');
+            setProfileBio('');
           }
 
           // Check if game state changed to profile (profile creation phase)
@@ -308,7 +351,7 @@ export default function HomePage() {
             setDrawnImageUrl('');
             fetchAssignedPrompts();
           }
-          
+
           // Check if game state changed to showcase/favorite/results phases
           if ((data.gameState === 'showcase' || data.gameState === 'favorite' || data.gameState === 'results') && view === 'profile') {
             setView('voting');
@@ -347,7 +390,7 @@ export default function HomePage() {
   const fetchAssignedPrompts = async () => {
     const roomRef = doc(db, "rooms", roomCode);
     const assignmentRef = doc(roomRef, "assignments", playerName);
-    
+
     try {
       const assignmentSnap = await getDoc(assignmentRef);
       if (assignmentSnap.exists()) {
@@ -361,6 +404,35 @@ export default function HomePage() {
     }
   };
 
+  // Auto-fetch prompts when entering profile view (handles page refresh / session restore)
+  useEffect(() => {
+    if (view === 'profile' && roomCode && playerName && !assignedPersona) {
+      fetchAssignedPrompts();
+    }
+  }, [view, roomCode, playerName]);
+
+  // Auto-restore drawing URL on reconnect (handles page refresh / session restore)
+  useEffect(() => {
+    if (view === 'profile' && roomCode && playerName && !drawnImageUrl) {
+      const restoreDrawing = async () => {
+        try {
+          const drawingRef = doc(db, 'rooms', roomCode, 'drawings', playerName);
+          const drawingSnap = await getDoc(drawingRef);
+          if (drawingSnap.exists()) {
+            const url = drawingSnap.data().url;
+            if (url) {
+              setDrawnImageUrl(url);
+              setDrawingCompleted(true);
+            }
+          }
+        } catch (err) {
+          console.error('Failed to restore drawing:', err);
+        }
+      };
+      restoreDrawing();
+    }
+  }, [view, roomCode, playerName]);
+
   // Auto-remove player when they close the tab
   useEffect(() => {
     if (view !== 'lobby' || !roomCode || !playerName) return;
@@ -368,10 +440,17 @@ export default function HomePage() {
     const handleBeforeUnload = () => {
       // This runs when the player closes the tab
       const roomRef = doc(db, "rooms", roomCode);
-      // We use arrayRemove to pull this player's object out of the list
-      updateDoc(roomRef, {
-        players: arrayRemove({ name: playerName, score: 0 })
-      });
+      // Find the exact player object from gameData to remove (score may not be 0)
+      const currentPlayer = gameData?.players?.find(p => p.name === playerName);
+      if (currentPlayer) {
+        updateDoc(roomRef, {
+          players: arrayRemove(currentPlayer)
+        });
+      } else {
+        updateDoc(roomRef, {
+          players: arrayRemove({ name: playerName, score: 0 })
+        });
+      }
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -379,112 +458,13 @@ export default function HomePage() {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [view, roomCode, playerName]);
+  }, [view, roomCode, playerName, gameData]);
 
-  // Host: detect all submissions and shuffle assignments (pre-profile → profile)
-  useEffect(() => {
-    if (view !== 'drawing' || !roomCode || !gameData || gameData.host !== playerName) return;
-
-    const submissionsRef = collection(db, 'rooms', roomCode, 'submissions');
-    const unsubscribe = onSnapshot(submissionsRef, async (snapshot) => {
-      const submissions = snapshot.docs.map(d => ({
-        playerName: d.id,
-        persona: d.data().persona,
-        quirk: d.data().quirk,
-      }));
-
-      // Check if all submitted or if roundEndTime has passed
-      const roomRef = doc(db, 'rooms', roomCode);
-      const roomSnap = await getDoc(roomRef);
-      if (roomSnap.data()?.assignmentsCreated) return;
-
-      const roundEnd = roomSnap.data()?.roundEndTime;
-      const roundExpired = roundEnd && (roundEnd.toDate ? roundEnd.toDate() : new Date(roundEnd)).getTime() < Date.now();
-      const allSubmitted = submissions.length >= gameData.players.length && gameData.players.length >= 2;
-
-      if (allSubmitted || (roundExpired && submissions.length > 0 && gameData.players.length >= 2)) {
-        // Fill in defaults for missing players
-        for (const player of gameData.players) {
-          if (!submissions.find(s => s.playerName === player.name)) {
-            const submissionRef = doc(db, 'rooms', roomCode, 'submissions', player.name);
-            await setDoc(submissionRef, {
-              persona: 'Mystery Person',
-              quirk: 'being mysterious',
-              submittedAt: new Date(),
-            });
-            submissions.push({ playerName: player.name, persona: 'Mystery Person', quirk: 'being mysterious' });
-          }
-        }
-
-        // Shuffle: rotate by 1 so no one gets their own
-        for (let i = 0; i < submissions.length; i++) {
-          const recipient = submissions[i].playerName;
-          const donor = submissions[(i + 1) % submissions.length];
-          const assignmentRef = doc(db, 'rooms', roomCode, 'assignments', recipient);
-          await setDoc(assignmentRef, {
-            assignedPersona: donor.persona,
-            assignedQuirk: donor.quirk,
-          });
-        }
-
-        const profileEnd = new Date();
-        profileEnd.setSeconds(profileEnd.getSeconds() + 120);
-
-        await updateDoc(roomRef, {
-          gameState: 'profile',
-          assignmentsCreated: true,
-          profileEndTime: profileEnd,
-        });
-      }
-    });
-
-    return () => unsubscribe();
-  }, [view, roomCode, gameData?.host, gameData?.players.length, playerName]);
-
-  // Host: detect all profiles submitted or timeout (profile → showcase)
-  useEffect(() => {
-    if (view !== 'profile' || !roomCode || !gameData || gameData.host !== playerName) return;
-
-    const profilesRef = collection(db, 'rooms', roomCode, 'profiles');
-    const unsubscribe = onSnapshot(profilesRef, async (snapshot) => {
-      const roomRef = doc(db, 'rooms', roomCode);
-      const roomSnap = await getDoc(roomRef);
-      if (roomSnap.data()?.gameState === 'showcase') return;
-
-      const profEnd = roomSnap.data()?.profileEndTime;
-      const profileExpired = profEnd && (profEnd.toDate ? profEnd.toDate() : new Date(profEnd)).getTime() < Date.now();
-      const allSubmitted = snapshot.docs.length >= gameData.players.length && gameData.players.length >= 2;
-
-      if (allSubmitted || (profileExpired && gameData.players.length >= 2)) {
-        // Fill in default profiles for missing players
-        const submittedNames = new Set(snapshot.docs.map(d => d.id));
-        for (const player of gameData.players) {
-          if (!submittedNames.has(player.name)) {
-            const assignmentRef = doc(db, 'rooms', roomCode, 'assignments', player.name);
-            const assignSnap = await getDoc(assignmentRef);
-            const assignData = assignSnap.exists() ? assignSnap.data() : {};
-            const profileRef = doc(db, 'rooms', roomCode, 'profiles', player.name);
-            await setDoc(profileRef, {
-              name: assignData?.assignedPersona || 'Mystery Person',
-              bio: 'Being mysterious...',
-              imageUrl: '',
-              persona: assignData?.assignedPersona || '',
-              quirk: assignData?.assignedQuirk || '',
-              likes: [],
-              submittedAt: new Date(),
-            });
-          }
-        }
-
-        await updateDoc(roomRef, {
-          gameState: 'showcase',
-          showcaseIndex: 0,
-        });
-      }
-    });
-
-    return () => unsubscribe();
-  }, [view, roomCode, gameData?.host, gameData?.players.length, playerName]);
+  // ============================================================================
+  // NOTE: Phase transitions (pre-profile → profile, profile → showcase) are now
+  // handled by the useGameLoop hook with Host-only write logic. This eliminates
+  // the race conditions that caused "Waiting for players" deadlocks.
+  // ============================================================================
 
   const handleJoinGame = async () => {
     const upperRoomCode = roomCode.toUpperCase().trim();
@@ -499,25 +479,25 @@ export default function HomePage() {
     try {
       // Ensure user is authenticated before accessing Firestore
       await ensureAuth();
-      
+
       const roomRef = doc(db, "rooms", upperRoomCode);
       const docSnap = await getDoc(roomRef);
       if (docSnap.exists()) {
         const currentPlayers = docSnap.data().players || [];
-        
+
         if (currentPlayers.some((p: Player) => p.name === playerName)) {
           setError("A player with that name is already in the room.");
           return;
         }
 
-        await updateDoc(roomRef, { 
-          players: arrayUnion({ name: playerName, score: 0 }) 
+        await updateDoc(roomRef, {
+          players: arrayUnion({ name: playerName, score: 0 })
         });
-        
+
         if (currentPlayers.length === 0) {
           await updateDoc(roomRef, { host: playerName });
         }
-        
+
         // Save the successful session
         setLastPlayerName(playerName);
         setSession({ roomCode: upperRoomCode, playerName });
@@ -563,6 +543,9 @@ export default function HomePage() {
         players: [{ name: playerName, score: 0 }],
         host: playerName,
         showcaseIndex: 0,
+        showcaseStarted: false,
+        showcaseReadyPlayers: [],
+        currentRound: 1,
         createdAt: new Date(),
       });
 
@@ -611,16 +594,18 @@ export default function HomePage() {
 
   const handleStartGame = async () => {
     if (gameData?.host !== playerName) return;
-    
+
     const roomRef = doc(db, "rooms", roomCode);
-    
+
     // Calculate the end time 60 seconds from now
-    const endTime = new Date();
+    const endTime = new Date(serverNow());
     endTime.setSeconds(endTime.getSeconds() + 60); // <-- Changed from 30 to 60
 
     await updateDoc(roomRef, {
       gameState: 'pre-profile', // <-- Use the new state name
-      roundEndTime: endTime     // <-- Set the master clock
+      roundEndTime: endTime,    // <-- Set the master clock
+      currentRound: 1,
+      assignmentsCreated: false, // Reset so host detection effect runs fresh
     });
   };
 
@@ -658,7 +643,7 @@ export default function HomePage() {
     const handleSubmitIdeas = async () => {
       const persona = (document.getElementById('persona') as HTMLInputElement)?.value;
       const quirk = (document.getElementById('quirk') as HTMLInputElement)?.value;
-      
+
       if (!persona || !quirk) {
         setError('Please fill out both fields.');
         return;
@@ -666,10 +651,10 @@ export default function HomePage() {
 
       try {
         await ensureAuth();
-        
+
         const roomRef = doc(db, "rooms", roomCode);
         const submissionRef = doc(roomRef, "submissions", playerName);
-        
+
         await updateDoc(submissionRef, {
           persona,
           quirk,
@@ -681,7 +666,7 @@ export default function HomePage() {
             submittedAt: new Date()
           });
         });
-        
+
         setError('');
         sfx.play('submit');
         setDrawingSubmitted(true);
@@ -720,7 +705,9 @@ export default function HomePage() {
           error={error}
           roundEndTime={roundEndTime}
           onAutoSubmit={handleAutoSubmitIdeas}
+          currentRound={gameData?.currentRound || 1}
         />
+        <ForceNextPhaseButton onForce={forceNextPhase} isHost={isHost} />
         <LeaveGameButton onLeave={handleLeaveGame} />
         <MuteToggle />
       </>
@@ -742,7 +729,7 @@ export default function HomePage() {
       try {
         const roomRef = doc(db, "rooms", roomCode);
         const profileRef = doc(roomRef, "profiles", playerName);
-        
+
         await setDoc(profileRef, {
           name: profileName,
           bio: profileBio,
@@ -752,7 +739,7 @@ export default function HomePage() {
           likes: [], // Initialize empty likes array
           submittedAt: new Date()
         });
-        
+
         setError('');
         sfx.play('submit');
         setProfileSubmitted(true);
@@ -807,6 +794,7 @@ export default function HomePage() {
           profileEndTime={profileEndTime}
           onAutoSubmitProfile={handleAutoSubmitProfile}
         />
+        <ForceNextPhaseButton onForce={forceNextPhase} isHost={isHost} />
         <LeaveGameButton onLeave={handleLeaveGame} />
         <MuteToggle />
       </>
@@ -827,12 +815,126 @@ export default function HomePage() {
           isHost={gameData?.host === playerName}
           players={gameData?.players || []}
           onVotingComplete={handleVotingComplete}
+          currentRound={gameData?.currentRound || 1}
+          onNextRound={async () => {
+            const roomRef = doc(db, 'rooms', roomCode);
+            const currentRound = gameData?.currentRound || 1;
+
+            // Calculate round scores
+            const profilesRef = collection(db, 'rooms', roomCode, 'profiles');
+            const profilesSnap = await getDocs(profilesRef);
+            const profilesList = profilesSnap.docs.map(d => ({
+              id: d.id,
+              ...d.data()
+            })) as { id: string; likes?: string[]; favoritePick?: string }[];
+
+            // Calculate round scores for each player
+            const roundScores: Record<string, number> = {};
+            (gameData?.players || []).forEach(p => { roundScores[p.name] = 0; });
+
+            profilesList.forEach(profile => {
+              if (roundScores[profile.id] !== undefined) {
+                roundScores[profile.id] += (profile.likes?.length || 0) * 5;
+              }
+            });
+            profilesList.forEach(profile => {
+              if (!profile.favoritePick || roundScores[profile.favoritePick] === undefined || roundScores[profile.id] === undefined) return;
+              const picked = profilesList.find(p => p.id === profile.favoritePick);
+              if (picked?.favoritePick === profile.id) {
+                roundScores[profile.id] += 35;
+              } else {
+                roundScores[profile.favoritePick] += 10;
+              }
+            });
+
+            // Accumulate scores into players array
+            const updatedPlayers = (gameData?.players || []).map(p => ({
+              name: p.name,
+              score: p.score + (roundScores[p.name] || 0),
+            }));
+
+            // Clean subcollections
+            const subcollections = ['profiles', 'submissions', 'assignments', 'drawings'];
+            for (const sub of subcollections) {
+              const colRef = collection(db, 'rooms', roomCode, sub);
+              const snapshot = await getDocs(colRef);
+              const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+              await Promise.all(deletePromises);
+            }
+
+            const endTime = new Date(serverNow());
+            endTime.setSeconds(endTime.getSeconds() + 60);
+
+            await updateDoc(roomRef, {
+              gameState: 'pre-profile',
+              currentRound: currentRound + 1,
+              players: updatedPlayers,
+              showcaseIndex: 0,
+              showcaseStarted: false,
+              showcaseReadyPlayers: [],
+              assignmentsCreated: false,
+              timerEndTime: null,
+              favoriteEndTime: null,
+              roundEndTime: endTime,
+              profileEndTime: null,
+            });
+          }}
           onPlayAgain={async () => {
             const roomRef = doc(db, 'rooms', roomCode);
+
+            // Calculate final round scores
+            const profilesRef = collection(db, 'rooms', roomCode, 'profiles');
+            const profilesSnap = await getDocs(profilesRef);
+            const profilesList = profilesSnap.docs.map(d => ({
+              id: d.id,
+              ...d.data()
+            })) as { id: string; likes?: string[]; favoritePick?: string }[];
+
+            const roundScores: Record<string, number> = {};
+            (gameData?.players || []).forEach(p => { roundScores[p.name] = 0; });
+
+            profilesList.forEach(profile => {
+              if (roundScores[profile.id] !== undefined) {
+                roundScores[profile.id] += (profile.likes?.length || 0) * 5;
+              }
+            });
+            profilesList.forEach(profile => {
+              if (!profile.favoritePick || roundScores[profile.favoritePick] === undefined || roundScores[profile.id] === undefined) return;
+              const picked = profilesList.find(p => p.id === profile.favoritePick);
+              if (picked?.favoritePick === profile.id) {
+                roundScores[profile.id] += 35;
+              } else {
+                roundScores[profile.favoritePick] += 10;
+              }
+            });
+
+            // Clean up subcollections from the finished round
+            const subcollections = ['profiles', 'submissions', 'assignments', 'drawings'];
+            for (const sub of subcollections) {
+              const colRef = collection(db, 'rooms', roomCode, sub);
+              const snapshot = await getDocs(colRef);
+              const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+              await Promise.all(deletePromises);
+            }
+
+            // Reset player scores to 0 for new game
+            const resetPlayers = (gameData?.players || []).map(p => ({
+              name: p.name,
+              score: 0,
+            }));
+
             await updateDoc(roomRef, {
               gameState: 'lobby',
+              currentRound: 1,
+              players: resetPlayers,
               showcaseIndex: 0,
+              showcaseStarted: false,
+              showcaseReadyPlayers: [],
               assignmentsCreated: false,
+              timerEndTime: null,
+              favoriteEndTime: null,
+              roundEndTime: null,
+              profileEndTime: null,
             });
           }}
         />

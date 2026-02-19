@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
-import { Paintbrush, Pen, Eraser, Undo, Check, Loader2, PaintBucket, Minus, Square, Circle } from 'lucide-react'
+import { Highlighter, Pen, Eraser, Undo, Check, Loader2, PaintBucket, Minus, Square, Circle, Trash2 } from 'lucide-react'
 import { storage, ensureAuth, db } from '../../lib/firebase'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { doc, setDoc } from 'firebase/firestore'
+import { CountdownTimer } from './CountdownTimer'
 
 interface DrawingCanvasProps {
   assignedPersona: string
@@ -11,9 +12,12 @@ interface DrawingCanvasProps {
   disabled?: boolean
   roomCode: string
   playerName: string
+  endTime?: Date | null
+  totalDuration?: number
+  onTimerExpired?: () => void
 }
 
-type ToolType = 'brush' | 'pen' | 'eraser' | 'fill' | 'line' | 'rect' | 'circle'
+type ToolType = 'highlighter' | 'pen' | 'eraser' | 'fill' | 'line' | 'rect' | 'circle'
 
 const CANVAS_SIZE = 800
 
@@ -25,7 +29,17 @@ const colors = [
   '#DEB887', '#FDBCB4',
 ]
 
-const BRUSH_SIZES = [2, 5, 10, 18, 30]
+const BRUSH_SIZES = [3, 10, 24]
+
+const allTools: { id: ToolType; icon: React.ReactNode; activeColor: string }[] = [
+  { id: 'pen', icon: <Pen className="w-5 h-5 text-slate-900" />, activeColor: 'bg-cyan-400' },
+  { id: 'highlighter', icon: <Highlighter className="w-5 h-5 text-slate-900" />, activeColor: 'bg-pink-500' },
+  { id: 'eraser', icon: <Eraser className="w-5 h-5 text-slate-900" />, activeColor: 'bg-yellow-300' },
+  { id: 'fill', icon: <PaintBucket className="w-5 h-5 text-slate-900" />, activeColor: 'bg-orange-400' },
+  { id: 'line', icon: <Minus className="w-5 h-5 text-slate-900" />, activeColor: 'bg-purple-400' },
+  { id: 'rect', icon: <Square className="w-5 h-5 text-slate-900" />, activeColor: 'bg-green-400' },
+  { id: 'circle', icon: <Circle className="w-5 h-5 text-slate-900" />, activeColor: 'bg-blue-400' },
+]
 
 export function DrawingCanvas({
   assignedPersona,
@@ -33,52 +47,76 @@ export function DrawingCanvas({
   onDrawingComplete,
   disabled: externalDisabled = false,
   roomCode,
-  playerName
+  playerName,
+  endTime,
+  totalDuration,
+  onTimerExpired
 }: DrawingCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDrawing, setIsDrawing] = useState(false)
-  const [tool, setTool] = useState<ToolType>('brush')
+  const [tool, setTool] = useState<ToolType>('pen')
   const [color, setColor] = useState('#000000')
   const [brushSize, setBrushSize] = useState(10)
   const [history, setHistory] = useState<ImageData[]>([])
   const [canvasInitialized, setCanvasInitialized] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
-  // For shape tool preview
+  const [isDesktop, setIsDesktop] = useState(true)
   const shapeStartRef = useRef<{ x: number; y: number } | null>(null)
   const preShapeImageRef = useRef<ImageData | null>(null)
 
   const disabled = externalDisabled || isUploading
 
-  // Initialize canvas with fixed resolution
+  // Detect desktop vs mobile so we only render ONE canvas (ref can only attach to one DOM node)
+  useEffect(() => {
+    const mql = window.matchMedia('(min-width: 640px)')
+    setIsDesktop(mql.matches)
+    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches)
+    mql.addEventListener('change', handler)
+    return () => mql.removeEventListener('change', handler)
+  }, [])
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-
     canvas.width = CANVAS_SIZE
     canvas.height = CANVAS_SIZE
-    ctx.fillStyle = '#FFFFFF'
-    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+    // Restore previous drawing if we have history (e.g. desktop/mobile toggle)
+    if (history.length > 0) {
+      ctx.putImageData(history[history.length - 1], 0, 0)
+    } else {
+      ctx.fillStyle = '#FFFFFF'
+      ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+    }
     setCanvasInitialized(true)
-  }, [])
+  }, [isDesktop])
 
-  // Initialize history after canvas is ready
   useEffect(() => {
     if (!canvasInitialized || history.length > 0) return
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx) return
-
     const imageData = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE)
     setHistory([imageData])
   }, [canvasInitialized, history.length])
+
+  // Keyboard shortcut: Ctrl/Cmd+Z for undo
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        handleUndo()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  })
 
   const saveToHistory = useCallback(() => {
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx) return
-
     const imageData = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE)
     setHistory((prev) => [...prev, imageData])
   }, [])
@@ -101,7 +139,6 @@ export function DrawingCanvas({
     }
   }
 
-  // --- Flood fill ---
   const floodFill = useCallback((startX: number, startY: number, fillColor: string) => {
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
@@ -112,7 +149,6 @@ export function DrawingCanvas({
     const width = CANVAS_SIZE
     const height = CANVAS_SIZE
 
-    // Parse fill color
     const temp = document.createElement('canvas')
     temp.width = 1; temp.height = 1
     const tmpCtx = temp.getContext('2d')!
@@ -131,18 +167,15 @@ export function DrawingCanvas({
     const targetB = data[startIdx + 2]
     const targetA = data[startIdx + 3]
 
-    // Don't fill if target color matches fill color
     if (targetR === fillR && targetG === fillG && targetB === fillB && targetA === fillA) return
 
     const tolerance = 30
-
     const matchesTarget = (idx: number) => {
       return Math.abs(data[idx] - targetR) <= tolerance &&
-             Math.abs(data[idx + 1] - targetG) <= tolerance &&
-             Math.abs(data[idx + 2] - targetB) <= tolerance &&
-             Math.abs(data[idx + 3] - targetA) <= tolerance
+        Math.abs(data[idx + 1] - targetG) <= tolerance &&
+        Math.abs(data[idx + 2] - targetB) <= tolerance &&
+        Math.abs(data[idx + 3] - targetA) <= tolerance
     }
-
     const setPixel = (idx: number) => {
       data[idx] = fillR
       data[idx + 1] = fillG
@@ -150,7 +183,6 @@ export function DrawingCanvas({
       data[idx + 3] = fillA
     }
 
-    // Scanline flood fill
     const stack: [number, number][] = [[sx, sy]]
     const visited = new Uint8Array(width * height)
 
@@ -160,11 +192,9 @@ export function DrawingCanvas({
       const vi = y * width + x
       if (visited[vi]) continue
       visited[vi] = 1
-
       const idx = vi * 4
       if (!matchesTarget(idx)) continue
 
-      // Find left and right bounds
       let lx = x
       while (lx > 0) {
         const li = (y * width + (lx - 1)) * 4
@@ -178,12 +208,10 @@ export function DrawingCanvas({
         rx++
       }
 
-      // Fill the span and check above/below
       for (let cx = lx; cx <= rx; cx++) {
         const ci = (y * width + cx) * 4
         setPixel(ci)
         visited[y * width + cx] = 1
-
         if (y > 0 && !visited[(y - 1) * width + cx] && matchesTarget(((y - 1) * width + cx) * 4)) {
           stack.push([cx, y - 1])
         }
@@ -196,17 +224,25 @@ export function DrawingCanvas({
     ctx.putImageData(imageData, 0, 0)
   }, [])
 
-  // --- Drawing helpers ---
   const applyToolStyle = (ctx: CanvasRenderingContext2D) => {
+    ctx.globalAlpha = 1.0
     if (tool === 'eraser') {
       ctx.strokeStyle = '#FFFFFF'
       ctx.lineWidth = brushSize * 2.5
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+    } else if (tool === 'highlighter') {
+      ctx.strokeStyle = color
+      ctx.lineWidth = brushSize * 2.5
+      ctx.globalAlpha = 0.65
+      ctx.lineCap = 'butt'
+      ctx.lineJoin = 'bevel'
     } else {
       ctx.strokeStyle = color
       ctx.lineWidth = brushSize
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
     }
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
   }
 
   const drawShapePreview = (ctx: CanvasRenderingContext2D, start: { x: number; y: number }, end: { x: number; y: number }) => {
@@ -214,7 +250,6 @@ export function DrawingCanvas({
     ctx.lineWidth = brushSize
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
-
     if (tool === 'line') {
       ctx.beginPath()
       ctx.moveTo(start.x, start.y)
@@ -242,15 +277,12 @@ export function DrawingCanvas({
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx) return
-
     if (tool === 'fill') {
       floodFill(x, y, color)
       saveToHistory()
       return
     }
-
     setIsDrawing(true)
-
     if (isShapeTool) {
       shapeStartRef.current = { x, y }
       preShapeImageRef.current = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE)
@@ -265,9 +297,7 @@ export function DrawingCanvas({
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx) return
-
     const { x, y } = getCanvasCoords(e)
-
     if (isShapeTool) {
       if (!shapeStartRef.current || !preShapeImageRef.current) return
       ctx.putImageData(preShapeImageRef.current, 0, 0)
@@ -293,18 +323,26 @@ export function DrawingCanvas({
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx) return
-
     const newHistory = history.slice(0, -1)
     const previousState = newHistory[newHistory.length - 1]
     ctx.putImageData(previousState, 0, 0)
     setHistory(newHistory)
   }
 
+  const handleClear = () => {
+    if (disabled) return
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+    saveToHistory()
+  }
+
   const handleSave = async () => {
     if (disabled) return
     const canvas = canvasRef.current
     if (!canvas) return
-
     setIsUploading(true)
     try {
       const blob = await new Promise<Blob>((resolve, reject) => {
@@ -313,21 +351,16 @@ export function DrawingCanvas({
           else reject(new Error("Failed to create blob"))
         }, 'image/jpeg', 0.8)
       })
-
       await ensureAuth()
-
       const storageRef = ref(storage, `drawings/${roomCode}/${playerName}.jpg`)
       await uploadBytes(storageRef, blob)
-
       const downloadURL = await getDownloadURL(storageRef)
-
       const drawingDocRef = doc(db, 'rooms', roomCode, 'drawings', playerName)
       await setDoc(drawingDocRef, {
         url: downloadURL,
         uploadedAt: new Date(),
         playerName: playerName
       })
-
       onDrawingComplete(downloadURL)
     } catch (error) {
       console.error('Error uploading drawing:', error)
@@ -337,27 +370,13 @@ export function DrawingCanvas({
     }
   }
 
-  const primaryTools: { id: ToolType; icon: React.ReactNode; activeColor: string }[] = [
-    { id: 'brush', icon: <Paintbrush className="w-6 h-6 sm:w-7 sm:h-7 text-slate-900" />, activeColor: 'bg-pink-500' },
-    { id: 'pen', icon: <Pen className="w-6 h-6 sm:w-7 sm:h-7 text-slate-900" />, activeColor: 'bg-cyan-400' },
-    { id: 'eraser', icon: <Eraser className="w-6 h-6 sm:w-7 sm:h-7 text-slate-900" />, activeColor: 'bg-yellow-300' },
-    { id: 'fill', icon: <PaintBucket className="w-6 h-6 sm:w-7 sm:h-7 text-slate-900" />, activeColor: 'bg-orange-400' },
-  ]
-
-  const shapeTools: { id: ToolType; icon: React.ReactNode; activeColor: string }[] = [
-    { id: 'line', icon: <Minus className="w-6 h-6 sm:w-7 sm:h-7 text-slate-900" />, activeColor: 'bg-purple-400' },
-    { id: 'rect', icon: <Square className="w-6 h-6 sm:w-7 sm:h-7 text-slate-900" />, activeColor: 'bg-green-400' },
-    { id: 'circle', icon: <Circle className="w-6 h-6 sm:w-7 sm:h-7 text-slate-900" />, activeColor: 'bg-blue-400' },
-  ]
-
   const renderToolButton = (t: { id: ToolType; icon: React.ReactNode; activeColor: string }) => (
     <button
       key={t.id}
       onClick={() => setTool(t.id)}
       disabled={disabled}
-      className={`flex-1 h-12 sm:h-14 rounded-xl flex items-center justify-center transition-all shadow-lg ${
-        tool === t.id ? `${t.activeColor} scale-105` : 'bg-white hover:bg-gray-100'
-      } border-4 border-slate-900 disabled:opacity-50 disabled:cursor-not-allowed`}
+      className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${tool === t.id ? `${t.activeColor} scale-105 shadow-[2px_2px_0px_#1e293b]` : 'bg-white hover:bg-gray-100'
+        } border-2 border-slate-900 disabled:opacity-50 disabled:cursor-not-allowed`}
     >
       {t.icon}
     </button>
@@ -368,91 +387,92 @@ export function DrawingCanvas({
       key={c}
       onClick={() => setColor(c)}
       disabled={disabled}
-      className={`w-10 h-10 rounded-lg flex-shrink-0 transition-all ${
-        color === c ? 'scale-110 ring-4 ring-pink-500' : 'hover:scale-105'
-      } border-3 border-slate-900 disabled:opacity-50 disabled:cursor-not-allowed`}
+      className={`w-8 h-8 rounded-lg flex-shrink-0 transition-all ${color === c ? 'scale-110 ring-3 ring-pink-500 ring-offset-1' : 'hover:scale-105'
+        } border-2 border-slate-900 disabled:opacity-50 disabled:cursor-not-allowed`}
       style={{ backgroundColor: c }}
     />
   )
 
-  return (
-    <div className="w-full min-h-screen bg-lime-300 flex flex-col items-center justify-center p-3 sm:p-6">
-      {/* Prompt Display */}
-      <div className="mb-4 bg-white rounded-2xl p-4 sm:p-6 shadow-lg border-4 border-slate-900 max-w-2xl w-full">
-        <h2 className="font-inter text-sm font-bold text-slate-900 mb-2 text-center uppercase tracking-widest">Your Prompt:</h2>
-        <p className="font-bebas text-3xl sm:text-4xl text-slate-900 text-center uppercase tracking-wide">
-          {assignedPersona}, {assignedQuirk}
-        </p>
-      </div>
+  const renderCanvas = () => (
+    <canvas
+      ref={canvasRef}
+      onMouseDown={startDrawing}
+      onMouseMove={draw}
+      onMouseUp={stopDrawing}
+      onMouseLeave={stopDrawing}
+      onTouchStart={startDrawing}
+      onTouchMove={draw}
+      onTouchEnd={stopDrawing}
+      className="w-full h-full touch-none"
+      style={{ cursor: disabled ? 'not-allowed' : 'crosshair' }}
+    />
+  )
 
-      {/* Main Drawing Area */}
-      <div className="w-full max-w-2xl">
-        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
-          {/* Canvas - Square */}
-          <div className="flex-1">
-            <div className="w-full aspect-square bg-white rounded-2xl shadow-lg overflow-hidden border-4 border-slate-900">
-              <canvas
-                ref={canvasRef}
-                onMouseDown={startDrawing}
-                onMouseMove={draw}
-                onMouseUp={stopDrawing}
-                onMouseLeave={stopDrawing}
-                onTouchStart={startDrawing}
-                onTouchMove={draw}
-                onTouchEnd={stopDrawing}
-                className="w-full h-full touch-none"
-                style={{ cursor: disabled ? 'not-allowed' : tool === 'fill' ? 'crosshair' : 'crosshair' }}
-              />
-            </div>
+  // === DESKTOP LAYOUT ===
+  if (isDesktop) {
+    return (
+      <div className="h-screen bg-lime-300 bg-game grid grid-rows-[auto_1fr_auto] grid-cols-[auto_1fr] overflow-hidden">
+        {/* Top bar */}
+        <div className="col-span-2 bg-white border-b-3 border-slate-900 shadow-[0_3px_0px_#1e293b] px-4 py-2 flex items-center gap-4">
+          {/* Left: Timer */}
+          <div className="flex-shrink-0">
+            {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={onTimerExpired} />}
           </div>
-          {/* Color Palette - Desktop: 2-column grid */}
-          <div className="hidden sm:flex flex-col gap-1 justify-center">
-            <div className="grid grid-cols-2 gap-1">
-              {colors.map(renderColorButton)}
-            </div>
-            {/* Custom color picker */}
-            <label className="relative w-full h-10 mt-1 cursor-pointer block">
-              <input
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                disabled={disabled}
-                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-              />
-              <div className="w-full h-full rounded-lg border-3 border-slate-900 bg-gradient-to-r from-red-500 via-green-500 to-blue-500 flex items-center justify-center">
-                <span className="text-white text-xs font-bold drop-shadow-md">Custom</span>
-              </div>
-            </label>
+
+          {/* Center: Prompt */}
+          <div className="flex-1 text-center min-w-0">
+            <p className="font-bebas text-2xl text-slate-900 uppercase tracking-wide truncate">
+              {assignedPersona}, {assignedQuirk}
+            </p>
           </div>
+
+          {/* Right: Done button */}
+          <button
+            onClick={handleSave}
+            disabled={disabled}
+            className="flex-shrink-0 h-10 px-5 rounded-xl flex items-center justify-center gap-1.5 bg-purple-600 hover:bg-purple-700 transition-all shadow-[3px_3px_0px_#1e293b] active:shadow-none active:translate-x-0.5 active:translate-y-0.5 border-3 border-slate-900 font-bold text-white uppercase text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isUploading ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>
+            ) : (
+              <><Check className="w-4 h-4" /> Done</>
+            )}
+          </button>
         </div>
 
-        {/* Color Palette - Mobile: scrollable row */}
-        <div className="flex sm:hidden gap-2 mt-3 overflow-x-auto pb-2">
-          {colors.map(renderColorButton)}
-          {/* Custom color picker for mobile */}
-          <label className="relative w-10 h-10 flex-shrink-0 cursor-pointer">
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              disabled={disabled}
-              className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-            />
-            <div className="w-10 h-10 rounded-lg border-3 border-slate-900 bg-gradient-to-br from-red-500 via-green-500 to-blue-500" />
-          </label>
-        </div>
+        {/* Left sidebar */}
+        <div className="bg-white/90 border-r-3 border-slate-900 px-2 py-3 flex flex-col items-center gap-2 overflow-y-auto">
+          {/* Undo + Clear */}
+          <button
+            onClick={handleUndo}
+            disabled={history.length <= 1 || disabled}
+            className="w-10 h-10 rounded-xl flex items-center justify-center bg-yellow-300 hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all border-2 border-slate-900"
+          >
+            <Undo className="w-5 h-5 text-slate-900" />
+          </button>
+          <button
+            onClick={handleClear}
+            disabled={disabled}
+            className="w-10 h-10 rounded-xl flex items-center justify-center bg-red-300 hover:bg-red-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all border-2 border-slate-900"
+          >
+            <Trash2 className="w-5 h-5 text-slate-900" />
+          </button>
 
-        {/* Brush Sizes */}
-        <div className="flex gap-2 sm:gap-3 mt-3 items-center justify-center">
-          <span className="font-inter text-xs font-bold text-slate-700 uppercase mr-1">Size:</span>
+          <div className="w-8 h-px bg-slate-300 my-1" />
+
+          {/* All 7 tools */}
+          {allTools.map(t => renderToolButton(t))}
+
+          <div className="w-8 h-px bg-slate-300 my-1" />
+
+          {/* 3 brush sizes */}
           {BRUSH_SIZES.map((size) => (
             <button
               key={size}
               onClick={() => setBrushSize(size)}
               disabled={disabled}
-              className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center transition-all border-3 border-slate-900 ${
-                brushSize === size ? 'bg-pink-500 scale-110' : 'bg-white hover:bg-gray-100'
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all border-2 border-slate-900 ${brushSize === size ? 'bg-pink-500 scale-105 shadow-[2px_2px_0px_#1e293b]' : 'bg-white hover:bg-gray-100'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <div
                 className="rounded-full bg-slate-900"
@@ -465,44 +485,121 @@ export function DrawingCanvas({
           ))}
         </div>
 
-        {/* Primary Tools */}
-        <div className="flex gap-2 sm:gap-3 mt-3">
-          {primaryTools.map(renderToolButton)}
+        {/* Canvas area */}
+        <div className="flex items-center justify-center p-4 overflow-hidden">
+          <div className="aspect-square h-full max-h-full max-w-full bg-white rounded-2xl shadow-[4px_4px_0px_#1e293b] overflow-hidden border-3 border-slate-900">
+            {renderCanvas()}
+          </div>
         </div>
 
-        {/* Shape Tools */}
-        <div className="flex gap-2 sm:gap-3 mt-2">
-          {shapeTools.map(renderToolButton)}
+        {/* Bottom bar */}
+        <div className="col-span-2 bg-white/90 border-t-3 border-slate-900 px-4 py-2 flex items-center justify-center gap-1.5 overflow-x-auto">
+          {colors.map(c => renderColorButton(c))}
+          <label className="relative w-8 h-8 flex-shrink-0 cursor-pointer">
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              disabled={disabled}
+              className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+            />
+            <div className="w-8 h-8 rounded-lg border-2 border-slate-900 bg-gradient-to-br from-red-500 via-green-500 to-blue-500" />
+          </label>
         </div>
+      </div>
+    )
+  }
 
-        {/* Action Buttons */}
-        <div className="flex gap-2 sm:gap-3 mt-3 sm:mt-4">
+  // === MOBILE LAYOUT ===
+  return (
+    <div className="h-screen bg-lime-300 bg-game flex flex-col overflow-hidden">
+      {/* Top: Prompt + Timer + Done */}
+      <div className="bg-white border-b-3 border-slate-900 shadow-[0_3px_0px_#1e293b] px-3 py-2 flex items-center gap-2">
+        {endTime && <CountdownTimer endTime={endTime} totalDuration={totalDuration} onExpired={onTimerExpired} />}
+        <p className="flex-1 font-bebas text-lg text-slate-900 uppercase tracking-wide truncate text-center">
+          {assignedPersona}, {assignedQuirk}
+        </p>
+        <button
+          onClick={handleSave}
+          disabled={disabled}
+          className="flex-shrink-0 h-9 px-4 rounded-xl flex items-center justify-center gap-1 bg-purple-600 hover:bg-purple-700 transition-all shadow-[2px_2px_0px_#1e293b] active:shadow-none active:translate-x-0.5 active:translate-y-0.5 border-2 border-slate-900 font-bold text-white uppercase text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isUploading ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>
+          ) : (
+            <><Check className="w-4 h-4" /> Done</>
+          )}
+        </button>
+      </div>
+
+      {/* Center: Canvas */}
+      <div className="flex-1 flex items-center justify-center p-2 overflow-hidden">
+        <div className="aspect-square h-full max-h-full max-w-full bg-white rounded-2xl shadow-[4px_4px_0px_#1e293b] overflow-hidden border-3 border-slate-900">
+          {renderCanvas()}
+        </div>
+      </div>
+
+      {/* Tools row: Undo + Clear + divider + 7 tools + divider + 3 sizes */}
+      <div className="flex items-center justify-center gap-1.5 px-2 py-1.5">
+        <button
+          onClick={handleUndo}
+          disabled={history.length <= 1 || disabled}
+          className="w-9 h-9 flex-shrink-0 rounded-lg flex items-center justify-center bg-yellow-300 hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all border-2 border-slate-900"
+        >
+          <Undo className="w-4 h-4 text-slate-900" />
+        </button>
+        <button
+          onClick={handleClear}
+          disabled={disabled}
+          className="w-9 h-9 flex-shrink-0 rounded-lg flex items-center justify-center bg-red-300 hover:bg-red-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all border-2 border-slate-900"
+        >
+          <Trash2 className="w-4 h-4 text-slate-900" />
+        </button>
+        <div className="w-px h-7 bg-slate-400 mx-0.5" />
+        {allTools.map(t => (
           <button
-            onClick={handleUndo}
-            disabled={history.length <= 1 || disabled}
-            className="flex-1 h-14 sm:h-16 rounded-xl flex items-center justify-center gap-2 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg border-4 border-slate-900 font-bold text-slate-900 uppercase text-lg"
-          >
-            <Undo className="w-6 h-6 sm:w-7 sm:h-7" />
-            Undo
-          </button>
-          <button
-            onClick={handleSave}
+            key={t.id}
+            onClick={() => setTool(t.id)}
             disabled={disabled}
-            className="flex-1 h-14 sm:h-16 rounded-xl flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-700 transition-all shadow-[4px_4px_0px_#1e293b] active:shadow-none active:translate-x-1 active:translate-y-1 border-4 border-slate-900 font-bold text-white uppercase text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${tool === t.id ? `${t.activeColor} scale-105 shadow-[2px_2px_0px_#1e293b]` : 'bg-white hover:bg-gray-100'
+              } border-2 border-slate-900 disabled:opacity-50 disabled:cursor-not-allowed`}
           >
-            {isUploading ? (
-              <>
-                <Loader2 className="w-6 h-6 sm:w-7 sm:h-7 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              <>
-                <Check className="w-6 h-6 sm:w-7 sm:h-7" />
-                Done
-              </>
-            )}
+            {t.icon}
           </button>
-        </div>
+        ))}
+        <div className="w-px h-7 bg-slate-400 mx-0.5" />
+        {BRUSH_SIZES.map((size) => (
+          <button
+            key={size}
+            onClick={() => setBrushSize(size)}
+            disabled={disabled}
+            className={`w-9 h-9 flex-shrink-0 rounded-lg flex items-center justify-center transition-all border-2 border-slate-900 ${brushSize === size ? 'bg-pink-500 scale-105' : 'bg-white hover:bg-gray-100'
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            <div
+              className="rounded-full bg-slate-900"
+              style={{
+                width: `${Math.max(3, size * 0.6)}px`,
+                height: `${Math.max(3, size * 0.6)}px`,
+              }}
+            />
+          </button>
+        ))}
+      </div>
+
+      {/* Bottom: Scrollable color row */}
+      <div className="flex gap-1.5 px-2 py-1.5 overflow-x-auto border-t border-slate-300">
+        {colors.map(c => renderColorButton(c))}
+        <label className="relative w-8 h-8 flex-shrink-0 cursor-pointer">
+          <input
+            type="color"
+            value={color}
+            onChange={(e) => setColor(e.target.value)}
+            disabled={disabled}
+            className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+          />
+          <div className="w-8 h-8 rounded-lg border-2 border-slate-900 bg-gradient-to-br from-red-500 via-green-500 to-blue-500" />
+        </label>
       </div>
     </div>
   )

@@ -1,39 +1,71 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { useServerTime } from './ServerTimeProvider'
 
 interface CountdownTimerProps {
   endTime: Date
+  totalDuration?: number
   onExpired?: () => void
 }
 
-export function CountdownTimer({ endTime, onExpired }: CountdownTimerProps) {
-  const [secondsLeft, setSecondsLeft] = useState(() => {
-    const diff = Math.max(0, Math.ceil((endTime.getTime() - Date.now()) / 1000))
-    return diff
-  })
+export function CountdownTimer({ endTime, totalDuration = 30, onExpired }: CountdownTimerProps) {
+  const { serverNow } = useServerTime()
+  const [timeLeft, setTimeLeft] = useState(0)
+  const [mounted, setMounted] = useState(false)
+  const expiredRef = useRef(false)
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      const diff = Math.max(0, Math.ceil((endTime.getTime() - Date.now()) / 1000))
-      setSecondsLeft(diff)
+    expiredRef.current = false
+    setMounted(true)
+    const update = () => {
+      const now = serverNow()
+      const diff = Math.max(0, Math.ceil((endTime.getTime() - now) / 1000))
+      setTimeLeft(diff)
 
-      if (diff <= 0) {
-        clearInterval(interval)
+      if (diff <= 0 && !expiredRef.current) {
+        expiredRef.current = true
         onExpired?.()
       }
-    }, 1000)
+    }
 
+    update() // Initial call
+    const interval = setInterval(update, 100)
     return () => clearInterval(interval)
-  }, [endTime, onExpired])
+  }, [endTime, onExpired, serverNow])
 
-  const isUrgent = secondsLeft <= 10
+  if (!mounted) return null // Prevent hydration mismatch
+
+  // Visuals
+  // "Glowing Aura" Top Progress Bar
+  const durationSafe = Math.max(1, totalDuration)
+  const progress = Math.min(100, Math.max(0, (timeLeft / durationSafe) * 100))
+
+  const isUrgent = timeLeft <= 5
+  // Colors: Gradient from Green -> Yellow -> Red
+  // We can just use a fixed gradient background and shrink the width
 
   return (
-    <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full border-4 border-slate-900 font-bebas text-2xl uppercase ${
-      isUrgent ? 'bg-red-400 text-white animate-pulse' : 'bg-white text-slate-900'
-    }`}>
-      <span>{secondsLeft}s</span>
+    <div className="fixed top-0 left-0 right-0 h-3 z-50 overflow-hidden pointer-events-none" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+      {/* Background track */}
+      <div className="absolute inset-0 bg-slate-900/20" />
+
+      {/* Progress Bar with Glow */}
+      <div
+        className="h-full transition-all duration-1000 ease-linear shadow-[0_0_15px_rgba(255,255,255,0.8)]"
+        style={{
+          width: `${progress}%`,
+          background: `linear-gradient(90deg, 
+            ${progress > 60 ? '#4ade80' : progress > 30 ? '#facc15' : '#ef4444'} 0%, 
+            ${progress > 60 ? '#22c55e' : progress > 30 ? '#eab308' : '#dc2626'} 100%)`,
+          boxShadow: `0 0 20px ${progress > 60 ? '#4ade80' : progress > 30 ? '#facc15' : '#ef4444'}`
+        }}
+      />
+
+      {/* Number badge (optional, but good to keep for clarity) */}
+      <div className="absolute top-4 right-4 bg-white/90 backdrop-blur border-2 border-slate-900 px-3 py-1 rounded-full font-bebas text-xl text-slate-900 shadow-md">
+        {timeLeft}s
+      </div>
     </div>
   )
 }
