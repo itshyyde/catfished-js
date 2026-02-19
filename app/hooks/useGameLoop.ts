@@ -57,13 +57,16 @@ export function useGameLoop(
                 quirk: d.data().quirk,
             }))
 
-            // Check if all submitted or if roundEndTime has passed
+            // Grace period to allow clients to auto-submit before host forces transition
+            const GRACE_PERIOD_MS = 1000
+
+            // Check if all submitted or if roundEndTime has passed (with grace period)
             const roomRef = doc(db, 'rooms', roomCode)
             const roomSnap = await getDoc(roomRef)
             if (roomSnap.data()?.assignmentsCreated) return
 
             const roundEnd = roomSnap.data()?.roundEndTime
-            const roundExpired = roundEnd && (roundEnd.toDate ? roundEnd.toDate() : new Date(roundEnd)).getTime() < Date.now()
+            const roundExpired = roundEnd && (roundEnd.toDate ? roundEnd.toDate() : new Date(roundEnd)).getTime() + GRACE_PERIOD_MS < Date.now()
             const allSubmitted = submissions.length >= gameData.players.length && gameData.players.length >= 2
 
             if (allSubmitted || (roundExpired && submissions.length > 0 && gameData.players.length >= 2)) {
@@ -122,9 +125,10 @@ export function useGameLoop(
                 const roomData = roomSnap.data()
                 if (roomData?.gameState === 'showcase') return
 
+                const GRACE_PERIOD_MS = 1000
                 const playerCount = roomData?.players?.length || 0
                 const profEnd = roomData?.profileEndTime
-                const profileExpired = profEnd && (profEnd.toDate ? profEnd.toDate() : new Date(profEnd)).getTime() < Date.now()
+                const profileExpired = profEnd && (profEnd.toDate ? profEnd.toDate() : new Date(profEnd)).getTime() + GRACE_PERIOD_MS < Date.now()
                 const allSubmitted = snapshot.docs.length >= playerCount && playerCount >= 2
 
                 if (allSubmitted || (profileExpired && playerCount >= 2)) {
